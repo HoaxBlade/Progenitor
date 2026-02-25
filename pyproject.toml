@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "progenitor"
+version = "0.1.0"
+description = "Enhance ML models and software to peak performance. Phase 1: ML inference."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+authors = [{ name = "Ayush Ranjan" }]
+dependencies = [
+    "numpy>=1.20",
+    "onnx>=1.12",
+    "onnxruntime>=1.14",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "pytest-cov>=4.0"]
+
+[project.scripts]
+progenitor = "progenitor.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["progenitor*"]

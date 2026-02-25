@@ -1,0 +1,41 @@
+# Bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env/
+
+# Build and install
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# Tests and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ONNX models (generated or downloaded; often large)
+examples/*.onnx
+
+# IDE and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

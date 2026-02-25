@@ -1,0 +1,38 @@
+"""Target and compatibility configuration for Phase 1."""
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Literal
+
+TargetId = Literal["cpu", "cuda"]
+
+
+@dataclass
+class Target:
+    """Hardware target for inference."""
+
+    id: TargetId
+    execution_providers: tuple[str, ...]
+
+    @classmethod
+    def from_id(cls, target_id: str) -> "Target":
+        id_ = target_id.lower().strip()
+        if id_ == "cpu":
+            return cls(id="cpu", execution_providers=("CPUExecutionProvider",))
+        if id_ == "cuda":
+            return cls(
+                id="cuda",
+                execution_providers=("CUDAExecutionProvider", "CPUExecutionProvider"),
+            )
+        raise ValueError(f"Unsupported target: {target_id}. Use 'cpu' or 'cuda'.")
+
+
+@dataclass
+class EnhanceOptions:
+    """Options for the enhance pipeline."""
+
+    target: Target
+    output_path: Path | None = None
+    quantize: bool = False
+    max_speed: bool = False  # Surrogate model: 10–50x+ on same CPU, approximate accuracy
+    graph_optimization_level: int = 99  # ORT_ALL

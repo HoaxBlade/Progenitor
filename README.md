@@ -30,18 +30,14 @@ python benchmarks/run.py path/to/model.onnx --target cpu
 ```
 
 **Virus-level speedup (same CPU, no GPU):**  
-Progenitor enhances the **same** machine. Two modes:
-
-- **10–50x+ on same CPU:** `--max-speed` builds a tiny surrogate that approximates the model (real measured speedup, not hardcoded). Best for legacy/edge/military where GPU isn’t available. Validate accuracy.
+Progenitor enhances the **same** model on the same device. Use `--quantize` (INT8) for **2–4x** on CPU:
 
 ```bash
-progenitor enhance path/to/model.onnx --target cpu --max-speed -o path/to/model_surrogate.onnx
-python benchmarks/run.py path/to/model.onnx --target cpu --max-speed --repeat 20
+progenitor enhance path/to/model.onnx --target cpu --quantize -o path/to/model_quantized.onnx
+python benchmarks/run.py path/to/model.onnx --target cpu --quantize --repeat 50
 ```
 
-- **2–4x on same CPU:** `--quantize` (INT8), same device.
-
-All timings are real; no hardcoded numbers.
+All timings are real; no hardcoded numbers. Pruning (same model, sparse) for higher speedup is planned.
 
 **Python API:**
 

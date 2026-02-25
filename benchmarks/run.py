@@ -28,14 +28,13 @@ def main() -> int:
     ap.add_argument("--verbose", "-v", action="store_true", help="Print raw sample timings to show measurements are live")
     ap.add_argument("--live", "-l", action="store_true", help="Stream each run's latency in real time as the benchmark runs")
     ap.add_argument("--quantize", "-q", action="store_true", help="Use INT8 quantization for 'after' (2–4x on CPU)")
-    ap.add_argument("--max-speed", "-m", action="store_true", help="Use tiny surrogate for 'after' (10–50x+ on same CPU, no GPU)")
     args = ap.parse_args()
 
     if not args.model.exists():
         print(f"Error: not found: {args.model}", file=sys.stderr)
         return 1
 
-    result = enhance(args.model, args.target, quantize=args.quantize, max_speed=args.max_speed)
+    result = enhance(args.model, args.target, quantize=args.quantize)
     if not result.compatible:
         print(f"Error: {result.message}", file=sys.stderr)
         return 1
@@ -64,9 +63,7 @@ def main() -> int:
         print("Progenitor benchmark — live stream (each run printed as it completes)")
         print("=" * 60)
         print(f"Model: {args.model}  Target: {args.target}  Warmup: {args.warmup}  Repeat: {args.repeat}")
-        if args.max_speed:
-            print("Mode: Surrogate 'after' (same CPU, 10–50x+ real speedup)")
-        elif args.quantize:
+        if args.quantize:
             print("Mode: INT8 quantized 'after' (same device, 2–4x typical on CPU)")
         print()
 
@@ -89,9 +86,9 @@ def main() -> int:
     if args.live:
         print()
 
-    # After: enhanced / surrogate / quantized, same device
+    # After: enhanced or quantized, same device
     if args.live:
-        after_label = "surrogate (tiny)" if args.max_speed else ("quantized INT8" if args.quantize else "enhanced, full graph opts")
+        after_label = "quantized INT8" if args.quantize else "enhanced, full graph opts"
         print("After (" + after_label + "):")
     after_out = run_metrics(
         result.output_path,
@@ -132,7 +129,7 @@ def main() -> int:
             else:
                 print("Note: 'After' is slower here. This often happens for very small models (e.g. tiny.onnx):")
                 print("  full graph optimization adds overhead that doesn't pay off for a single op.")
-                print("  For 10–50x on same CPU (no GPU) use --max-speed (surrogate). For 2–4x use --quantize.")
+                print("  For 2–4x on same CPU use --quantize (INT8) on larger models.")
     return 0
 
 

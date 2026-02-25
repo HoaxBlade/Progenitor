@@ -20,7 +20,6 @@ def main() -> None:
     p.add_argument("--target", "-t", default="cpu", choices=("cpu", "cuda"), help="Hardware target (default: cpu)")
     p.add_argument("--output", "-o", type=Path, default=None, help="Output path for enhanced model (default: <model>_enhanced.onnx)")
     p.add_argument("--quantize", action="store_true", help="Apply INT8 quantization (2–4x on CPU)")
-    p.add_argument("--max-speed", action="store_true", help="Build tiny surrogate: 10–50x+ on same CPU, no GPU. Approximate accuracy.")
     p.set_defaults(func=_cmd_enhance)
 
     args = parser.parse_args()
@@ -33,7 +32,6 @@ def _cmd_enhance(args: argparse.Namespace) -> None:
         args.target,
         output_path=args.output,
         quantize=args.quantize,
-        max_speed=getattr(args, "max_speed", False),
     )
     if not result.compatible:
         print(result.message, file=sys.stderr)

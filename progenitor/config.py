@@ -34,5 +34,4 @@ class EnhanceOptions:
     target: Target
     output_path: Path | None = None
     quantize: bool = False
-    max_speed: bool = False  # Surrogate model: 10–50x+ on same CPU, approximate accuracy
     graph_optimization_level: int = 99  # ORT_ALL

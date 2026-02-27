@@ -121,13 +121,24 @@ def main() -> int:
     if args.live:
         print()
 
+    # Detect if model is CNN-like (native sparse backend only handles MLPs)
+    import onnx as _onnx
+    _orig_model = _onnx.load(str(args.model))
+    from collections import Counter as _Counter
+    _op_counts = _Counter(n.op_type for n in _orig_model.graph.node)
+    _is_conv_heavy = _op_counts.get("Conv", 0) > _op_counts.get("MatMul", 0) + _op_counts.get("Gemm", 0) and _op_counts.get("Conv", 0) >= 3
+    del _orig_model
+
     # After: enhanced, quantized, or pruned with sparse backend
     use_native_sparse = False
     use_int8_sparse = False
     effective_prune = args.prune
     if args.max_speed and effective_prune is None:
-        effective_prune = 0.99
-    if effective_prune is not None:
+        if _is_conv_heavy:
+            effective_prune = 0.9
+        else:
+            effective_prune = 0.99
+    if effective_prune is not None and not _is_conv_heavy:
         try:
             from progenitor.backends.accelerate_sparse_native import native_sparse_available
             if native_sparse_available():

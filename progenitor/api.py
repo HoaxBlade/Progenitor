@@ -77,6 +77,35 @@ def enhance(
     model = apply_shape_inference(model)
     model = apply_onnx_simplifier(model)
 
+    # Detect architecture: count Conv vs MatMul/Gemm nodes
+    from collections import Counter
+    op_counts = Counter(n.op_type for n in model.graph.node)
+    n_conv = op_counts.get("Conv", 0)
+    n_linear = op_counts.get("MatMul", 0) + op_counts.get("Gemm", 0)
+    is_conv_heavy = n_conv > n_linear and n_conv >= 3
+
+    if max_speed:
+        if is_conv_heavy:
+            # CNN path: block removal + aggressive channel pruning
+            struct_prune = struct_prune if struct_prune is not None else 0.9
+            prune = None
+        else:
+            # MLP path: stack everything
+            struct_prune = struct_prune if struct_prune is not None else 0.75
+            lowrank = lowrank if lowrank is not None else 0.1
+            prune = prune if prune is not None else 0.99
+        # Update the opts object
+        opts = EnhanceOptions(
+            target=t,
+            output_path=opts.output_path,
+            quantize=quantize,
+            static_quantize=static_quantize,
+            prune=prune,
+            struct_prune=struct_prune,
+            lowrank=lowrank,
+            max_speed=max_speed,
+        )
+
     out = opts.output_path
     if out is None:
         if opts.static_quantize:
@@ -106,14 +135,19 @@ def enhance(
     # 1. Structured pruning (physical graph shrinkage)
     if opts.struct_prune is not None:
         try:
-            from progenitor.optimizations.structured_prune import apply_structured_pruning
-            apply_structured_pruning(model, opts.struct_prune)
-            applied_passes.append(f"structured prune {opts.struct_prune:.0%}")
+            if is_conv_heavy:
+                from progenitor.optimizations.conv_prune import apply_conv_structured_pruning
+                apply_conv_structured_pruning(model, opts.struct_prune)
+                applied_passes.append(f"conv filter prune {opts.struct_prune:.0%}")
+            else:
+                from progenitor.optimizations.structured_prune import apply_structured_pruning
+                apply_structured_pruning(model, opts.struct_prune)
+                applied_passes.append(f"structured prune {opts.struct_prune:.0%}")
         except Exception as e:
             applied_passes.append(f"structured prune FAILED ({e})")
 
-    # 2. Low-rank SVD decomposition
-    if opts.lowrank is not None:
+    # 2. Low-rank SVD decomposition (skip for Conv-heavy models — their compute is in Conv, not MatMul)
+    if opts.lowrank is not None and not is_conv_heavy:
         try:
             from progenitor.optimizations.lowrank import apply_lowrank_decomposition
             apply_lowrank_decomposition(model, opts.lowrank)
@@ -136,12 +170,13 @@ def enhance(
         passes_str = " -> ".join(applied_passes)
         msg = f"Applied: {passes_str}."
         if opts.prune is not None:
-            msg += " Use native sparse backend for full speedup."
+            msg += f" Pruned to {opts.prune:.0%} sparsity. Use native sparse backend for full speedup."
         return EnhanceResult(
             input_path=model_path,
             output_path=out,
             target=t,
             compatible=True,
+            message=msg,
             message=msg,
         )
 

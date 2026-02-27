@@ -125,7 +125,8 @@ def main() -> int:
         if speedup < 1.0:
             print()
             if args.quantize:
-                print("Note: 'After' (quantized) is slower here. Try without --quantize for graph-only enhance.")
+                print("Note: 'After' (quantized) is slower here. On some CPUs (e.g. Mac, or without Intel VNNI)")
+                print("  INT8 can be slower than FP32. Use graph-only enhance instead: omit --quantize.")
             else:
                 print("Note: 'After' is slower here. This often happens for very small models (e.g. tiny.onnx):")
                 print("  full graph optimization adds overhead that doesn't pay off for a single op.")

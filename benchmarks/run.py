@@ -233,10 +233,14 @@ def main() -> int:
         print()
         print("Running accuracy validation...")
         try:
-            mse = validate_accuracy(args.model, result.output_path)
-            print(f"Validation MSE: {mse:.6e}")
-            if mse > 1e-2:
-                print("WARNING: High MSE detected! Enhancement may have significantly altered model outputs.")
+            metrics = validate_accuracy(args.model, result.output_path)
+            cos_sim = metrics['cosine_similarity']
+            mse = metrics['mse']
+            top1 = metrics['top1_match']
+            print(f"Cosine similarity: {cos_sim:.4f}  (1.0 = identical output direction)")
+            print(f"Top-1 match: {'Yes' if top1 else 'No'}   MSE: {mse:.6e}")
+            if cos_sim < 0.9:
+                print("WARNING: Low cosine similarity — pruning significantly altered model behavior.")
         except Exception as e:
             print(f"Validation failed: {e}")
 

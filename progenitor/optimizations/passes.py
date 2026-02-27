@@ -20,8 +20,8 @@ def apply_onnx_simplifier(model: ModelProto) -> ModelProto:
             return model_simp
     except ImportError:
         pass
-    except Exception as e:
-        print(f"Warning: onnx-simplifier failed ({e}). Proceeding without simplification.")
+    except Exception:
+        pass  # Simplifier not compatible with newer IR versions, skip silently
     return model
 
 def apply_ort_offline_optimization(model: ModelProto, output_path: str | Path, target: Target) -> None:

@@ -45,10 +45,23 @@ def enhance(
     t = Target.from_id(target) if isinstance(target, str) else target
 
     if max_speed:
-        conv_prune = conv_prune if conv_prune is not None else 0.5
-        struct_prune = struct_prune if struct_prune is not None else 0.75
-        lowrank = lowrank if lowrank is not None else 0.1
-        prune = prune if prune is not None else 0.99
+        # Detect architecture to apply only beneficial passes
+        model_tmp = load_onnx(model_path)
+        from collections import Counter
+        op_counts = Counter(n.op_type for n in model_tmp.graph.node)
+        n_conv = op_counts.get("Conv", 0)
+        n_linear = op_counts.get("MatMul", 0) + op_counts.get("Gemm", 0)
+        is_cnn = n_conv > n_linear and n_conv >= 3
+        del model_tmp
+
+        if is_cnn:
+            # CNN: only conv channel pruning provides real speedup
+            conv_prune = conv_prune if conv_prune is not None else 0.3
+        else:
+            # MLP: all passes contribute to speedup
+            struct_prune = struct_prune if struct_prune is not None else 0.75
+            lowrank = lowrank if lowrank is not None else 0.1
+            prune = prune if prune is not None else 0.99
 
     opts = EnhanceOptions(
         target=t,

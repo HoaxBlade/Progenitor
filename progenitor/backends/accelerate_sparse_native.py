@@ -18,7 +18,6 @@ from pathlib import Path
 import numpy as np
 from onnx import ModelProto, numpy_helper
 
-_DYLIB_PATH = Path(__file__).parent / "_sparse_forward.dylib"
 _lib = None
 _WEIGHT_OPS = {"MatMul": [0, 1], "Gemm": [0, 1]}
 
@@ -27,11 +26,18 @@ def _get_lib():
     global _lib
     if _lib is not None:
         return _lib
-    if platform.system() != "Darwin":
-        raise ImportError("Native Accelerate sparse is macOS-only")
-    if not _DYLIB_PATH.exists():
-        raise ImportError(f"Compiled library not found: {_DYLIB_PATH}. Run: cc -O3 -shared -o {_DYLIB_PATH} {_DYLIB_PATH.with_suffix('.c')} -framework Accelerate -fPIC")
-    _lib = ctypes.cdll.LoadLibrary(str(_DYLIB_PATH))
+    if platform.system() == "Darwin":
+        dylib_path = Path(__file__).parent / "_sparse_forward.dylib"
+        if not dylib_path.exists():
+            raise ImportError(f"Compiled library not found: {dylib_path}. Run: cc -O3 -shared -o {dylib_path} {dylib_path.with_suffix('.c')} -framework Accelerate -fPIC")
+    elif platform.system() == "Windows":
+        dylib_path = Path(__file__).parent / "_sparse_forward_win.dll"
+        if not dylib_path.exists():
+            raise ImportError(f"Compiled library not found: {dylib_path}. Run: gcc -O3 -shared -o {dylib_path} {dylib_path.with_suffix('.c')}")
+    else:
+        raise ImportError(f"Native sparse backend not yet supported on {platform.system()}")
+        
+    _lib = ctypes.cdll.LoadLibrary(str(dylib_path))
 
     # FP32 sparse API
     _lib.smlp_create.restype = ctypes.c_void_p

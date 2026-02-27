@@ -46,9 +46,20 @@ def _find_linear_chain(model: ModelProto) -> list[dict]:
             w_name = node.input[1] if node.input[1] in init_map else node.input[0]
             bias_name = node.input[2] if len(node.input) > 2 and node.input[2] in init_map else None
             has_relu = (i + 1 < len(order) and order[i + 1].op_type == "Relu")
+            
+            transB = 0
+            for attr in node.attribute:
+                if attr.name == "transB":
+                    transB = attr.i
+                    break
+                    
+            w_arr = init_map[w_name].astype(np.float32)
+            if transB:
+                w_arr = w_arr.T
+                
             layers.append(dict(
-                w_name=w_name, bias_name=bias_name, relu=has_relu,
-                w_arr=init_map[w_name].astype(np.float32),
+                w_name=w_name, bias_name=bias_name, relu=has_relu, transB=transB,
+                w_arr=w_arr,
                 bias_arr=init_map[bias_name].astype(np.float32) if bias_name else None,
             ))
             if has_relu:
@@ -79,7 +90,7 @@ def _find_linear_chain(model: ModelProto) -> list[dict]:
                 has_relu = True
                 i += 1
             layers.append(dict(
-                w_name=w_name, bias_name=bias_name, relu=has_relu,
+                w_name=w_name, bias_name=bias_name, relu=has_relu, transB=0,
                 w_arr=init_map[w_name].astype(np.float32),
                 bias_arr=init_map[bias_name].astype(np.float32) if bias_name else None,
             ))
@@ -139,7 +150,10 @@ def apply_structured_pruning(model: ModelProto, ratio: float) -> None:
     new_inits = []
     updated = {}
     for layer in layers:
-        updated[layer["w_name"]] = layer["w_arr"]
+        w_out = layer["w_arr"]
+        if layer["transB"]:
+            w_out = w_out.T
+        updated[layer["w_name"]] = w_out
         if layer["bias_name"] is not None and layer["bias_arr"] is not None:
             updated[layer["bias_name"]] = layer["bias_arr"]
 

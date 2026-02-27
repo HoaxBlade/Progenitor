@@ -53,6 +53,17 @@ def apply_lowrank_decomposition(model: ModelProto, rank_ratio: float = 0.25) -> 
             continue
 
         W = init_map[w_name]
+        
+        transB = 0
+        if node.op_type == "Gemm":
+            for attr in node.attribute:
+                if attr.name == "transB":
+                    transB = attr.i
+                    break
+        
+        if transB:
+            W = W.T
+            
         m, n = W.shape
         r = max(1, int(min(m, n) * rank_ratio))
 
@@ -65,7 +76,17 @@ def apply_lowrank_decomposition(model: ModelProto, rank_ratio: float = 0.25) -> 
 
         u_name = f"{w_name}_U"
         v_name = f"{w_name}_V"
-
+        
+        # If the original Gemm had transB=1, it expects a weight matrix of shape (n, m).
+        # We factored W (m, n) into U (m, r) and V (r, n).
+        # We need the node replacement to execute X @ W_orig.
+        # X @ (U @ V)
+        # So MatMul1 = X @ U, Gemm2 = MatMul1 @ V.
+        # But if transB=1, Gemm2 will transpose its second argument natively.
+        # So we must provide V.T to Gemm2, and we must *remove* the transB flag from Gemm2 entirely,
+        # OR we can keep transB=1 on Gemm2 and provide V. 
+        # Actually, simpler: just remove transB from the Gemm2 attributes and always pass V (r, n).
+        
         inits_to_add.append(numpy_helper.from_array(np.ascontiguousarray(U), u_name))
         inits_to_add.append(numpy_helper.from_array(np.ascontiguousarray(V), v_name))
         inits_to_remove.add(w_name)
@@ -95,7 +116,8 @@ def apply_lowrank_decomposition(model: ModelProto, rank_ratio: float = 0.25) -> 
                 name=f"{node.name}_V" if node.name else "",
             )
             for attr in node.attribute:
-                if attr.name in ("alpha", "beta"):
+                # We do not carry over transB because V is stored in correct (r, n) shape
+                if attr.name in ("alpha", "beta", "transA"):
                     gemm_node.attribute.append(attr)
 
             nodes_to_remove.append(node)

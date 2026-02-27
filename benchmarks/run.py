@@ -34,6 +34,10 @@ def main() -> int:
     ap.add_argument("--live", "-l", action="store_true", help="Stream each run's latency in real time as the benchmark runs")
     ap.add_argument("--quantize", "-q", action="store_true", help="Use INT8 quantization for 'after' (2–4x on CPU)")
     ap.add_argument("--prune", "-p", type=float, default=None, metavar="SPARSITY", help="Use magnitude pruning for 'after', e.g. 0.9 = 90%% zeros (sparse inference for 5–15×)")
+    ap.add_argument("--struct-prune", type=float, default=None, metavar="RATIO", help="Structured pruning: remove RATIO fraction of hidden neurons (e.g. 0.5)")
+    ap.add_argument("--lowrank", type=float, default=None, metavar="RANK_RATIO", help="Low-rank SVD decomposition: keep RANK_RATIO of singular values (e.g. 0.25)")
+    ap.add_argument("--max-speed", action="store_true", help="Chain all optimizations for maximum speedup (~30-50×)")
+    ap.add_argument("--int8-sparse", action="store_true", help="Use INT8 quantized sparse backend (bonus, additional ~1.5-2x)")
     ap.add_argument("--validate", action="store_true", help="Validate accuracy degradation (MSE) between baseline and enhanced model.")
     args = ap.parse_args()
 
@@ -44,7 +48,14 @@ def main() -> int:
         print("Error: --prune must be between 0 and 1", file=sys.stderr)
         return 1
 
-    result = enhance(args.model, args.target, quantize=args.quantize, prune=args.prune)
+    result = enhance(
+        args.model, args.target,
+        quantize=args.quantize,
+        prune=args.prune,
+        struct_prune=args.struct_prune,
+        lowrank=args.lowrank,
+        max_speed=args.max_speed,
+    )
     if not result.compatible:
         print(f"Error: {result.message}", file=sys.stderr)
         return 1
@@ -73,10 +84,19 @@ def main() -> int:
         print("Progenitor benchmark — live stream (each run printed as it completes)")
         print("=" * 60)
         print(f"Model: {args.model}  Target: {args.target}  Warmup: {args.warmup}  Repeat: {args.repeat}")
-        if args.quantize:
+        if args.max_speed:
+            print("Mode: MAX SPEED (structured prune -> low-rank -> unstructured prune + sparse)")
+        elif args.quantize:
             print("Mode: INT8 quantized 'after' (same device, 2–4x typical on CPU)")
-        if args.prune is not None:
+        elif args.prune is not None:
             print(f"Mode: Pruned {args.prune:.0%} sparsity 'after' (ORT, same runtime as before)")
+        elif args.struct_prune is not None or args.lowrank is not None:
+            parts = []
+            if args.struct_prune is not None:
+                parts.append(f"struct-prune {args.struct_prune:.0%}")
+            if args.lowrank is not None:
+                parts.append(f"low-rank {args.lowrank:.0%}")
+            print(f"Mode: {' + '.join(parts)}")
         print()
 
     # Before: original model, no graph opts (same device)
@@ -100,33 +120,58 @@ def main() -> int:
 
     # After: enhanced, quantized, or pruned with sparse backend
     use_native_sparse = False
-    if args.prune is not None:
+    use_int8_sparse = False
+    effective_prune = args.prune
+    if args.max_speed and effective_prune is None:
+        effective_prune = 0.99
+    if effective_prune is not None:
         try:
-            from progenitor.backends.accelerate_sparse_native import NativeSparseSession, native_sparse_available
+            from progenitor.backends.accelerate_sparse_native import native_sparse_available
             if native_sparse_available():
-                _probe_sess = NativeSparseSession(result.output_path)
-                _probe_sess.run(feed)
-                use_native_sparse = True
-                del _probe_sess
+                if args.int8_sparse:
+                    from progenitor.backends.accelerate_sparse_native import NativeSparseSessionI8
+                    _probe_sess = NativeSparseSessionI8(result.output_path)
+                    _probe_sess.run(feed)
+                    use_int8_sparse = True
+                    use_native_sparse = True
+                    del _probe_sess
+                else:
+                    from progenitor.backends.accelerate_sparse_native import NativeSparseSession
+                    _probe_sess = NativeSparseSession(result.output_path)
+                    _probe_sess.run(feed)
+                    use_native_sparse = True
+                    del _probe_sess
         except Exception:
             pass
 
     if args.live:
-        if args.quantize:
+        if args.max_speed and use_int8_sparse:
+            after_label = "MAX SPEED + INT8 sparse (Accelerate SparseBLAS)"
+        elif args.max_speed and use_native_sparse:
+            after_label = "MAX SPEED: struct-prune + low-rank + sparse (Accelerate SparseBLAS)"
+        elif args.max_speed:
+            after_label = "MAX SPEED: struct-prune + low-rank + unstructured prune"
+        elif args.quantize:
             after_label = "quantized INT8"
-        elif args.prune is not None and use_native_sparse:
-            after_label = f"pruned {args.prune:.0%} sparsity (Accelerate SparseBLAS native)"
-        elif args.prune is not None:
-            after_label = f"pruned {args.prune:.0%} sparsity"
+        elif effective_prune is not None and use_int8_sparse:
+            after_label = f"pruned {effective_prune:.0%} INT8 sparse (Accelerate)"
+        elif effective_prune is not None and use_native_sparse:
+            after_label = f"pruned {effective_prune:.0%} sparsity (Accelerate SparseBLAS native)"
+        elif effective_prune is not None:
+            after_label = f"pruned {effective_prune:.0%} sparsity"
         else:
             after_label = "enhanced, full graph opts"
         print("After (" + after_label + "):")
 
     if use_native_sparse:
         import time as _time
-        from progenitor.backends.accelerate_sparse_native import NativeSparseSession
         from progenitor.runner import InferenceMetrics
-        _sess = NativeSparseSession(result.output_path)
+        if use_int8_sparse:
+            from progenitor.backends.accelerate_sparse_native import NativeSparseSessionI8
+            _sess = NativeSparseSessionI8(result.output_path)
+        else:
+            from progenitor.backends.accelerate_sparse_native import NativeSparseSession
+            _sess = NativeSparseSession(result.output_path)
         for _ in range(args.warmup):
             _sess.run(feed)
         _times = []
@@ -195,7 +240,7 @@ def main() -> int:
     if before.latency_ms > 0:
         speedup = before.latency_ms / after.latency_ms
         print(f"Speedup:   {speedup:.2f}x")
-        if args.prune is not None and not use_native_sparse and speedup < 5.0:
+        if effective_prune is not None and not use_native_sparse and speedup < 5.0:
             print()
             print("Note: Pruned model runs with ONNX Runtime (dense). For 5–25× use a sparse backend.")
         if speedup < 1.0:
@@ -203,7 +248,7 @@ def main() -> int:
             if args.quantize:
                 print("Note: 'After' (quantized) is slower here. On some CPUs (e.g. Mac, or without Intel VNNI)")
                 print("  INT8 can be slower than FP32. Use graph-only enhance instead: omit --quantize.")
-            elif args.prune is not None:
+            elif effective_prune is not None:
                 print("Note: 'After' (pruned) is slower here. ORT runs pruned weights as dense; use a sparse backend for 5–15×.")
             else:
                 print("Note: 'After' is slower here. This often happens for very small models (e.g. tiny.onnx):")

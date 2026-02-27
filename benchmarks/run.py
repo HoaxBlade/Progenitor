@@ -36,7 +36,6 @@ def main() -> int:
     ap.add_argument("--static-quantize", "-sq", action="store_true", help="Use Static INT8 quantization for 'after' (much faster on CPU)")
     ap.add_argument("--prune", "-p", type=float, default=None, metavar="SPARSITY", help="Use magnitude pruning for 'after', e.g. 0.9 = 90%% zeros (sparse inference for 5–15×)")
     ap.add_argument("--struct-prune", type=float, default=None, metavar="RATIO", help="Structured pruning: remove RATIO fraction of hidden neurons (e.g. 0.5)")
-    ap.add_argument("--conv-prune", type=float, default=None, metavar="RATIO", help="Conv channel pruning: remove RATIO fraction of Conv output channels (e.g. 0.5)")
     ap.add_argument("--lowrank", type=float, default=None, metavar="RANK_RATIO", help="Low-rank SVD decomposition: keep RANK_RATIO of singular values (e.g. 0.25)")
     ap.add_argument("--max-speed", action="store_true", help="Chain all optimizations for maximum speedup (~30-50×)")
     ap.add_argument("--int8-sparse", action="store_true", help="Use INT8 quantized sparse backend (bonus, additional ~1.5-2x)")
@@ -55,7 +54,6 @@ def main() -> int:
         quantize=args.quantize,
         prune=args.prune,
         struct_prune=args.struct_prune,
-        conv_prune=args.conv_prune,
         lowrank=args.lowrank,
         max_speed=args.max_speed,
     )
@@ -121,24 +119,13 @@ def main() -> int:
     if args.live:
         print()
 
-    # Detect if model is CNN-like (native sparse backend only handles MLPs)
-    import onnx as _onnx
-    _orig_model = _onnx.load(str(args.model))
-    from collections import Counter as _Counter
-    _op_counts = _Counter(n.op_type for n in _orig_model.graph.node)
-    _is_conv_heavy = _op_counts.get("Conv", 0) > _op_counts.get("MatMul", 0) + _op_counts.get("Gemm", 0) and _op_counts.get("Conv", 0) >= 3
-    del _orig_model
-
     # After: enhanced, quantized, or pruned with sparse backend
     use_native_sparse = False
     use_int8_sparse = False
     effective_prune = args.prune
     if args.max_speed and effective_prune is None:
-        if _is_conv_heavy:
-            effective_prune = 0.9
-        else:
-            effective_prune = 0.99
-    if effective_prune is not None and not _is_conv_heavy:
+        effective_prune = 0.99
+    if effective_prune is not None:
         try:
             from progenitor.backends.accelerate_sparse_native import native_sparse_available
             if native_sparse_available():

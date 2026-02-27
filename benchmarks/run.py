@@ -17,6 +17,7 @@ import onnxruntime as ort
 
 from progenitor.api import enhance
 from progenitor.runner import create_random_feed, run_metrics
+from progenitor.validate import validate_accuracy
 
 
 def main() -> int:
@@ -29,6 +30,7 @@ def main() -> int:
     ap.add_argument("--live", "-l", action="store_true", help="Stream each run's latency in real time as the benchmark runs")
     ap.add_argument("--quantize", "-q", action="store_true", help="Use INT8 quantization for 'after' (2–4x on CPU)")
     ap.add_argument("--prune", "-p", type=float, default=None, metavar="SPARSITY", help="Use magnitude pruning for 'after', e.g. 0.9 = 90%% zeros (sparse inference for 5–15×)")
+    ap.add_argument("--validate", action="store_true", help="Validate accuracy degradation (MSE) between baseline and enhanced model.")
     args = ap.parse_args()
 
     if not args.model.exists():
@@ -128,8 +130,20 @@ def main() -> int:
         print(f"  Before: {[f'{t:.4f}' for t in before_times[:5]]}")
         print(f"  After:  {[f'{t:.4f}' for t in after_times[:5]]}")
     print()
-    print(f"Before    latency: {before.latency_ms:.3f} ms   throughput: {before.throughput_per_sec:.1f} /s")
-    print(f"After     latency: {after.latency_ms:.3f} ms   throughput: {after.throughput_per_sec:.1f} /s")
+    print(f"Before    latency: {before.latency_ms:.3f} ms   throughput: {before.throughput_per_sec:.1f} /s    peak RAM: {before.peak_memory_mb:.2f} MB")
+    print(f"After     latency: {after.latency_ms:.3f} ms   throughput: {after.throughput_per_sec:.1f} /s    peak RAM: {after.peak_memory_mb:.2f} MB")
+    
+    if args.validate:
+        print()
+        print("Running accuracy validation...")
+        try:
+            mse = validate_accuracy(args.model, result.output_path)
+            print(f"Validation MSE: {mse:.6e}")
+            if mse > 1e-2:
+                print("WARNING: High MSE detected! Enhancement may have significantly altered model outputs.")
+        except Exception as e:
+            print(f"Validation failed: {e}")
+
     if before.latency_ms > 0:
         speedup = before.latency_ms / after.latency_ms
         print(f"Speedup:   {speedup:.2f}x")

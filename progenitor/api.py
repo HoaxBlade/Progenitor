@@ -5,7 +5,7 @@ from pathlib import Path
 
 from progenitor.config import EnhanceOptions, Target
 from progenitor.loader import load_onnx, save_onnx
-from progenitor.optimizations.passes import apply_shape_inference
+from progenitor.optimizations.passes import apply_shape_inference, apply_onnx_simplifier, apply_ort_offline_optimization
 
 
 @dataclass
@@ -60,6 +60,7 @@ def enhance(
 
     # Graph-level passes
     model = apply_shape_inference(model)
+    model = apply_onnx_simplifier(model)
 
     out = opts.output_path
     if out is None:
@@ -115,7 +116,18 @@ def enhance(
                 compatible=True,
                 message=f"Quantization failed ({e}); saved graph-enhanced FP32 only. Run without --quantize for normal enhance.",
             )
-    save_onnx(model, out)
+    # Standard enhance: bake in ORT optimizations offline
+    try:
+        apply_ort_offline_optimization(model, out, t)
+    except Exception as e:
+        save_onnx(model, out)
+        return EnhanceResult(
+            input_path=model_path,
+            output_path=out,
+            target=t,
+            compatible=True,
+            message=f"Enhanced (graph passes only, offline ORT fusion failed: {e}). Run with ONNX Runtime graph_optimization_level=ORT_ENABLE_ALL.",
+        )
     return EnhanceResult(
         input_path=model_path,
         output_path=out,

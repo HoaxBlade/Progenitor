@@ -15,6 +15,7 @@ dependencies = [
     "onnx>=1.12",
     "onnxruntime>=1.14",
     "pyyaml>=6.0",
+    "onnxsim>=0.4.33",
 ]
 
 [project.optional-dependencies]

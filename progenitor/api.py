@@ -90,6 +90,43 @@ def enhance(
     model = apply_shape_inference(model)
     model = apply_onnx_simplifier(model)
 
+    # Detect architecture: CNN vs Transformer vs MLP
+    from collections import Counter
+    op_counts = Counter(n.op_type for n in model.graph.node)
+    n_conv = op_counts.get("Conv", 0)
+    n_linear = op_counts.get("MatMul", 0) + op_counts.get("Gemm", 0)
+    has_softmax = op_counts.get("Softmax", 0) > 0
+    has_layernorm = op_counts.get("LayerNormalization", 0) > 0
+    is_conv_heavy = n_conv > n_linear and n_conv >= 3
+    is_transformer = not is_conv_heavy and (has_softmax or has_layernorm) and n_linear >= 6
+
+    if max_speed:
+        if is_conv_heavy:
+            # CNN path: block removal + aggressive channel pruning
+            struct_prune = struct_prune if struct_prune is not None else 0.9
+            prune = None
+        elif is_transformer:
+            # Transformer path: FFN pruning + low-rank on attention projections
+            struct_prune = struct_prune if struct_prune is not None else 0.9
+            lowrank = lowrank if lowrank is not None else 0.05
+            prune = None
+        else:
+            # MLP path: stack everything
+            struct_prune = struct_prune if struct_prune is not None else 0.75
+            lowrank = lowrank if lowrank is not None else 0.1
+            prune = prune if prune is not None else 0.99
+        # Update the opts object
+        opts = EnhanceOptions(
+            target=t,
+            output_path=opts.output_path,
+            quantize=quantize,
+            static_quantize=static_quantize,
+            prune=prune,
+            struct_prune=struct_prune,
+            lowrank=lowrank,
+            max_speed=max_speed,
+        )
+
     out = opts.output_path
     if out is None:
         if opts.static_quantize:
@@ -119,9 +156,18 @@ def enhance(
     # 1. Structured pruning (physical graph shrinkage)
     if opts.struct_prune is not None:
         try:
-            from progenitor.optimizations.structured_prune import apply_structured_pruning
-            apply_structured_pruning(model, opts.struct_prune)
-            applied_passes.append(f"structured prune {opts.struct_prune:.0%}")
+            if is_conv_heavy:
+                from progenitor.optimizations.conv_prune import apply_conv_structured_pruning
+                apply_conv_structured_pruning(model, opts.struct_prune)
+                applied_passes.append(f"conv filter prune {opts.struct_prune:.0%}")
+            elif is_transformer:
+                from progenitor.optimizations.transformer_prune import apply_transformer_structured_pruning
+                apply_transformer_structured_pruning(model, opts.struct_prune)
+                applied_passes.append(f"transformer FFN prune {opts.struct_prune:.0%}")
+            else:
+                from progenitor.optimizations.structured_prune import apply_structured_pruning
+                apply_structured_pruning(model, opts.struct_prune)
+                applied_passes.append(f"structured prune {opts.struct_prune:.0%}")
         except Exception as e:
             applied_passes.append(f"structured prune FAILED ({e})")
 

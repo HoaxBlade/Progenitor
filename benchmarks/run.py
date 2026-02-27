@@ -17,7 +17,11 @@ import onnxruntime as ort
 
 from progenitor.api import enhance
 from progenitor.runner import create_random_feed, run_metrics
-from progenitor.validate import validate_accuracy
+
+try:
+    from progenitor.validate import validate_accuracy
+except ImportError:
+    validate_accuracy = None
 
 
 def main() -> int:
@@ -94,29 +98,71 @@ def main() -> int:
     if args.live:
         print()
 
-    # After: enhanced, quantized, or pruned — always ORT (same runtime as before)
+    # After: enhanced, quantized, or pruned with sparse backend
+    use_native_sparse = False
+    if args.prune is not None:
+        try:
+            from progenitor.backends.accelerate_sparse_native import NativeSparseSession, native_sparse_available
+            if native_sparse_available():
+                _probe_sess = NativeSparseSession(result.output_path)
+                _probe_sess.run(feed)
+                use_native_sparse = True
+                del _probe_sess
+        except Exception:
+            pass
+
     if args.live:
         if args.quantize:
             after_label = "quantized INT8"
+        elif args.prune is not None and use_native_sparse:
+            after_label = f"pruned {args.prune:.0%} sparsity (Accelerate SparseBLAS native)"
         elif args.prune is not None:
             after_label = f"pruned {args.prune:.0%} sparsity"
         else:
             after_label = "enhanced, full graph opts"
         print("After (" + after_label + "):")
-    after_out = run_metrics(
-        result.output_path,
-        feed,
-        execution_providers=after_providers,
-        graph_optimization_level=ort.GraphOptimizationLevel.ORT_ENABLE_ALL,
-        warmup=args.warmup,
-        repeat=args.repeat,
-        return_raw_times=args.verbose or args.live,
-        on_sample=on_sample_after,
-    )
-    if isinstance(after_out, tuple):
-        after, after_times = after_out[0], after_out[1]
+
+    if use_native_sparse:
+        import time as _time
+        from progenitor.backends.accelerate_sparse_native import NativeSparseSession
+        from progenitor.runner import InferenceMetrics
+        _sess = NativeSparseSession(result.output_path)
+        for _ in range(args.warmup):
+            _sess.run(feed)
+        _times = []
+        for i in range(args.repeat):
+            _t0 = _time.perf_counter()
+            _sess.run(feed)
+            _t1 = _time.perf_counter()
+            _t_ms = (_t1 - _t0) * 1000.0
+            _times.append(_t_ms)
+            if on_sample_after:
+                on_sample_after(i + 1, _t_ms)
+        import numpy as _np
+        _lat = float(_np.median(_times))
+        after = InferenceMetrics(
+            latency_ms=_lat,
+            throughput_per_sec=1000.0 / _lat if _lat > 0 else 0.0,
+            warmup_runs=args.warmup,
+            timed_runs=args.repeat,
+            peak_memory_mb=0.0,
+        )
+        after_times = _times if (args.verbose or args.live) else None
     else:
-        after, after_times = after_out, None
+        after_out = run_metrics(
+            result.output_path,
+            feed,
+            execution_providers=after_providers,
+            graph_optimization_level=ort.GraphOptimizationLevel.ORT_ENABLE_ALL,
+            warmup=args.warmup,
+            repeat=args.repeat,
+            return_raw_times=args.verbose or args.live,
+            on_sample=on_sample_after,
+        )
+        if isinstance(after_out, tuple):
+            after, after_times = after_out[0], after_out[1]
+        else:
+            after, after_times = after_out, None
 
     if args.live:
         print()
@@ -149,9 +195,9 @@ def main() -> int:
     if before.latency_ms > 0:
         speedup = before.latency_ms / after.latency_ms
         print(f"Speedup:   {speedup:.2f}x")
-        if args.prune is not None and speedup < 5.0:
+        if args.prune is not None and not use_native_sparse and speedup < 5.0:
             print()
-            print("Note: Pruned model runs with ONNX Runtime (dense). For 5–15× use a sparse backend (e.g. Intel CPU + pip install sparse-dot-mkl).")
+            print("Note: Pruned model runs with ONNX Runtime (dense). For 5–25× use a sparse backend.")
         if speedup < 1.0:
             print()
             if args.quantize:

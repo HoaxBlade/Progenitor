@@ -1,0 +1,79 @@
+{
+  "small_mlp": {
+    "baseline": {
+      "latency_ms": 0.042550000216579065,
+      "speedup": 1.0,
+      "cosine": 1.0,
+      "top1_match": true,
+      "mse": 0.0
+    },
+    "conv-prune 30%": {
+      "latency_ms": 0.0427999993917183,
+      "speedup": 1.011682268361418,
+      "cosine": 1.0000000000000002,
+      "top1_match": true,
+      "mse": 0.0,
+      "message": "Applied: conv channel prune 30%."
+    },
+    "struct-prune 50%": {
+      "latency_ms": 0.04175000049144728,
+      "speedup": 0.9940119523069262,
+      "cosine": 0.5333527628929593,
+      "top1_match": false,
+      "mse": 0.09635022296000757,
+      "message": "Applied: structured prune 50%."
+    },
+    "static INT8": {
+      "latency_ms": 0.0714999987394549,
+      "speedup": 0.5986014133675117,
+      "cosine": 0.9998238319479203,
+      "top1_match": true,
+      "mse": 7.9231723604267e-05,
+      "message": "Applied: static INT8 quantization."
+    },
+    "max-speed": {
+      "error": "[ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Load model from <__main__.run_benchmark.<locals>.DummySess object at 0x000001B8269FCBD0> failed:Load model <__main__.run_benchmark.<locals>.DummySess object at 0x000001B8269FCBD0> failed"
+    }
+  },
+  "resnet50": {
+    "baseline": {
+      "latency_ms": 30.150399999911315,
+      "speedup": 1.0,
+      "cosine": 1.0,
+      "top1_match": true,
+      "mse": 0.0
+    },
+    "conv-prune 30%": {
+      "latency_ms": 20.191699999486445,
+      "speedup": 1.5166231669964698,
+      "cosine": 0.951864297067048,
+      "top1_match": false,
+      "mse": 5.684372437903932,
+      "message": "Applied: conv channel prune 30%."
+    },
+    "struct-prune 50%": {
+      "latency_ms": 34.41575000033481,
+      "speedup": 0.8562518614293625,
+      "cosine": 1.0,
+      "top1_match": true,
+      "mse": 0.0,
+      "message": "Applied: structured prune 50%."
+    },
+    "static INT8": {
+      "latency_ms": 49.45760000100563,
+      "speedup": 0.7056711202862188,
+      "cosine": 0.9881174373158041,
+      "top1_match": false,
+      "mse": 1.8787031178097766,
+      "message": "Applied: static INT8 quantization."
+    },
+    "max-speed": {
+      "latency_ms": 21.398449998741853,
+      "speedup": 1.5857900923426662,
+      "cosine": 0.9573030884125532,
+      "top1_match": false,
+      "mse": 5.170616425453297,
+      "message": "Applied: conv channel prune 40%."
+    }
+  }
+}

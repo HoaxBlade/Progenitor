@@ -55,13 +55,25 @@ def enhance(
         del model_tmp
 
         if is_cnn:
-            # CNN: only conv channel pruning provides real speedup
-            conv_prune = conv_prune if conv_prune is not None else 0.3
+            # CNN: only conv channel pruning is universally fast across all CPUs
+            # INT8 quant can be slower on CPUs without VNNI instructions (like the current Windows host)
+            conv_prune = conv_prune if conv_prune is not None else 0.40
+            static_quantize = False
         else:
-            # MLP: all passes contribute to speedup
-            struct_prune = struct_prune if struct_prune is not None else 0.75
-            lowrank = lowrank if lowrank is not None else 0.1
-            prune = prune if prune is not None else 0.99
+            # MLP: check size, tiny models can't survive 90% pruning
+            import numpy as np
+            total_params = sum(
+                np.prod(i.dims) for i in getattr(load_onnx(model_path).graph, 'initializer', [])
+                if getattr(i, 'dims', None)
+            )
+            if total_params < 100_000:  # e.g., small_mlp is 17k
+                struct_prune = struct_prune if struct_prune is not None else None
+                lowrank = lowrank if lowrank is not None else None
+                prune = prune if prune is not None else 0.50
+            else:
+                struct_prune = struct_prune if struct_prune is not None else 0.50
+                lowrank = lowrank if lowrank is not None else 0.25
+                prune = prune if prune is not None else 0.90
 
     opts = EnhanceOptions(
         target=t,
@@ -143,9 +155,25 @@ def enhance(
         except Exception as e:
             applied_passes.append(f"prune FAILED ({e})")
 
-    # If any optimization pass ran, save and return
+    # If any optimization pass ran, save the pruned model
     if applied_passes:
         save_onnx(model, out)
+
+    # 4. Static quantization (can stack on top of pruning)
+    if opts.static_quantize or static_quantize:
+        try:
+            from progenitor.optimizations.quantize import apply_static_quantization
+            # Quantize the (possibly pruned) model
+            source = out if applied_passes else None
+            if source:
+                apply_static_quantization(load_onnx(source), out)
+            else:
+                apply_static_quantization(model, out)
+            applied_passes.append("static INT8 quantization")
+        except Exception as e:
+            applied_passes.append(f"static quantize FAILED ({e})")
+
+    if applied_passes:
         passes_str = " -> ".join(applied_passes)
         msg = f"Applied: {passes_str}."
         if opts.prune is not None:
@@ -158,26 +186,6 @@ def enhance(
             message=msg,
         )
 
-    if opts.static_quantize:
-        try:
-            from progenitor.optimizations.quantize import apply_static_quantization
-            apply_static_quantization(model, out)
-            return EnhanceResult(
-                input_path=model_path,
-                output_path=out,
-                target=t,
-                compatible=True,
-                message="Quantized statically (INT8/UInt8). Peak CPU vector performance. Validate accuracy on real data.",
-            )
-        except Exception as e:
-            save_onnx(model, out)
-            return EnhanceResult(
-                input_path=model_path,
-                output_path=out,
-                target=t,
-                compatible=True,
-                message=f"Static quantization failed ({e}); saved graph-enhanced FP32 only.",
-            )
 
     # 4. INT8 quantization (standalone)
     if opts.quantize:

@@ -159,14 +159,19 @@ def _prune_array_by_importance(
 
 def apply_importance_pruning(
     model: ModelProto,
-    sparsity: float,
+    sparsity: float | dict[str, float],
     importance: dict[str, np.ndarray],
 ) -> None:
     """
     Prune by importance (|w| * activation_importance) so same sparsity gives higher cosine.
     Modifies model in-place. Falls back to magnitude for weights without importance.
+    sparsity: float for uniform, or dict[initializer_name, float] for per-layer sparsity.
     """
-    if not 0 <= sparsity <= 1:
+    if isinstance(sparsity, dict):
+        for v in sparsity.values():
+            if not 0 <= v <= 1:
+                raise ValueError("per-layer sparsity must be in [0, 1]")
+    elif not 0 <= sparsity <= 1:
         raise ValueError("sparsity must be in [0, 1]")
     to_prune = _weight_initializer_names(model)
     if not to_prune:
@@ -185,16 +190,17 @@ def apply_importance_pruning(
         if arr.size < 2 or arr.dtype not in (np.float32, np.float64):
             new_initializers.append(init)
             continue
+        s = (sparsity.get(init.name, 0.5) if isinstance(sparsity, dict) else sparsity)
         if init.name in weight_to_data:
             data_tensor, input_axis = weight_to_data[init.name]
             imp = importance.get(data_tensor)
             if imp is not None and np.issubdtype(np.asarray(imp).dtype, np.floating):
                 imp = np.asarray(imp).ravel()
                 if (input_axis == 0 and imp.size == arr.shape[0]) or (input_axis == 1 and imp.size == arr.shape[1]):
-                    pruned = _prune_array_by_importance(arr, sparsity, imp, input_axis)
+                    pruned = _prune_array_by_importance(arr, s, imp, input_axis)
                     new_initializers.append(numpy_helper.from_array(pruned.astype(arr.dtype), init.name))
                     continue
-        pruned = _prune_array(arr, sparsity)
+        pruned = _prune_array(arr, s)
         new_initializers.append(numpy_helper.from_array(pruned.astype(arr.dtype), init.name))
 
     del model.graph.initializer[:]
@@ -233,13 +239,66 @@ def _prune_array(arr: np.ndarray, sparsity: float) -> np.ndarray:
     return out
 
 
-def apply_pruning(model: ModelProto, sparsity: float) -> None:
+def _prune_array_blocks(
+    arr: np.ndarray, sparsity: float, block_h: int = 4, block_w: int = 4
+) -> np.ndarray:
+    """
+    Zero whole blocks so that 'sparsity' fraction of blocks are zeroed.
+    Ranks blocks by L2 norm; zeros lowest-norm blocks. Hardware-friendly for block-sparse backends.
+    """
+    if sparsity <= 0 or arr.size == 0:
+        return arr
+    if sparsity >= 1:
+        return np.zeros_like(arr)
+    arr = np.asarray(arr, dtype=np.float64)
+    h, w = arr.shape[0], arr.shape[1]
+    if h < block_h or w < block_w:
+        return _prune_array(arr, sparsity)
+    n_bh, n_bw = (h + block_h - 1) // block_h, (w + block_w - 1) // block_w
+    block_norms = np.zeros((n_bh, n_bw))
+    for i in range(n_bh):
+        for j in range(n_bw):
+            r = slice(i * block_h, min((i + 1) * block_h, h))
+            c = slice(j * block_w, min((j + 1) * block_w, w))
+            block_norms[i, j] = np.sum(arr[r, c] ** 2)
+    n_blocks = block_norms.size
+    n_zero = max(0, int(sparsity * n_blocks))
+    if n_zero <= 0:
+        return arr.copy()
+    flat = block_norms.ravel()
+    k = n_blocks - n_zero
+    if k <= 0:
+        return np.zeros_like(arr)
+    threshold = np.partition(flat, k - 1)[k - 1]
+    out = arr.copy()
+    for i in range(n_bh):
+        for j in range(n_bw):
+            if block_norms[i, j] <= threshold:
+                r = slice(i * block_h, min((i + 1) * block_h, h))
+                c = slice(j * block_w, min((j + 1) * block_w, w))
+                out[r, c] = 0
+    return out
+
+
+def apply_pruning(
+    model: ModelProto,
+    sparsity: float | dict[str, float],
+    *,
+    block_size: tuple[int, int] | None = None,
+) -> None:
     """
     Prune weight initializers in-place: zero out smallest-magnitude weights to achieve
     target sparsity (e.g. 0.9 = 90% zeros). Only Conv/MatMul/Gemm weight tensors are pruned.
     Same graph, same ops; use with sparse inference for 5–15× speedup.
+
+    sparsity: float for uniform, or dict[initializer_name, float] for per-layer sparsity.
+    block_size: if (bh, bw), prune in blocks (hardware-friendly); 2D weights only.
     """
-    if not 0 <= sparsity <= 1:
+    if isinstance(sparsity, dict):
+        for s in sparsity.values():
+            if not 0 <= s <= 1:
+                raise ValueError("per-layer sparsity values must be in [0, 1]")
+    elif not 0 <= sparsity <= 1:
         raise ValueError("sparsity must be in [0, 1]")
     to_prune = _weight_initializer_names(model)
     if not to_prune:
@@ -258,13 +317,88 @@ def apply_pruning(model: ModelProto, sparsity: float) -> None:
         if arr.size < 2:
             new_initializers.append(init)
             continue
-        # Only prune float types
         if arr.dtype not in (np.float32, np.float64):
             new_initializers.append(init)
             continue
-        pruned = _prune_array(arr, sparsity)
+        s = (sparsity.get(init.name, 0.5) if isinstance(sparsity, dict) else sparsity)
+        if arr.ndim == 2 and block_size is not None:
+            bh, bw = block_size[0], block_size[1]
+            pruned = _prune_array_blocks(arr, s, bh, bw)
+        else:
+            pruned = _prune_array(arr, s)
         new_init = numpy_helper.from_array(pruned.astype(arr.dtype), init.name)
         new_initializers.append(new_init)
 
     del model.graph.initializer[:]
     model.graph.initializer.extend(new_initializers)
+
+
+def apply_block_pruning(
+    model: ModelProto,
+    sparsity: float,
+    block_size: tuple[int, int] = (4, 4),
+) -> None:
+    """
+    Prune weights in blocks (e.g. 4x4) so whole blocks are zeroed.
+    Gives hardware-friendly sparsity; use with block-sparse backends for better speedup per removed weight.
+    """
+    apply_pruning(model, sparsity, block_size=block_size)
+
+
+def tune_per_layer_sparsity(
+    model: ModelProto,
+    original_model_path: str | None,
+    importance: dict[str, np.ndarray],
+    *,
+    cosine_threshold: float = 0.9,
+    base_sparsity: float = 0.6,
+    step: float = 0.1,
+    max_sparsity: float = 0.95,
+) -> dict[str, float]:
+    """
+    Greedy per-layer sparsity tuner: start at base_sparsity for all layers, then try
+    increasing each layer's sparsity; keep increase if cosine stays >= cosine_threshold.
+    Returns dict[initializer_name, sparsity] for apply_importance_pruning(..., sparsity).
+    """
+    from pathlib import Path
+
+    to_prune = _weight_initializer_names(model)
+    if not to_prune:
+        return {}
+    weight_names = sorted(to_prune)
+    sparsity_per_layer = {n: base_sparsity for n in weight_names}
+
+    if original_model_path is None:
+        return sparsity_per_layer
+
+    try:
+        from progenitor.loader import save_onnx
+        from progenitor.validate import validate_accuracy
+    except ImportError:
+        return sparsity_per_layer
+
+    def current_cosine() -> float:
+        m = copy.deepcopy(model)
+        apply_importance_pruning(m, sparsity_per_layer, importance)
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as f:
+            tmp = Path(f.name)
+        try:
+            save_onnx(m, tmp)
+            metrics = validate_accuracy(original_model_path, tmp, seed=42)
+            return float(metrics["cosine_similarity"])
+        finally:
+            try:
+                tmp.unlink()
+            except FileNotFoundError:
+                pass
+
+    for name in weight_names:
+        while sparsity_per_layer[name] + step <= max_sparsity:
+            sparsity_per_layer[name] = min(max_sparsity, sparsity_per_layer[name] + step)
+            if current_cosine() >= cosine_threshold:
+                continue
+            sparsity_per_layer[name] = max(base_sparsity, sparsity_per_layer[name] - step)
+            break
+
+    return sparsity_per_layer

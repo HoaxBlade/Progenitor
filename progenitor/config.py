@@ -41,3 +41,7 @@ class EnhanceOptions:
     lowrank: float | None = None  # e.g. 0.25 = keep top 25% singular values
     max_speed: bool = False  # chain all passes for maximum speedup
     graph_optimization_level: int = 99  # ORT_ALL
+    # High speedup + high cosine (see docs)
+    per_layer_tune: bool = False  # tune sparsity per layer for better cosine at same speedup
+    block_size: tuple[int, int] | None = None  # e.g. (4,4) for block-sparse pruning
+    calibrate_output: bool = False  # post-prune scale/bias to recover cosine

@@ -36,6 +36,7 @@ def main() -> int:
     ap.add_argument("--static-quantize", "-sq", action="store_true", help="Use Static INT8 quantization for 'after' (much faster on CPU)")
     ap.add_argument("--prune", "-p", type=float, default=None, metavar="SPARSITY", help="Use magnitude pruning for 'after', e.g. 0.9 = 90%% zeros (sparse inference for 5–15×)")
     ap.add_argument("--struct-prune", type=float, default=None, metavar="RATIO", help="Structured pruning: remove RATIO fraction of hidden neurons (e.g. 0.5)")
+    ap.add_argument("--conv-prune", type=float, default=None, metavar="RATIO", help="Conv channel pruning: remove RATIO fraction of Conv bottleneck channels (e.g. 0.5)")
     ap.add_argument("--lowrank", type=float, default=None, metavar="RANK_RATIO", help="Low-rank SVD decomposition: keep RANK_RATIO of singular values (e.g. 0.25)")
     ap.add_argument("--max-speed", action="store_true", help="Chain all optimizations for maximum speedup (~30-50×)")
     ap.add_argument("--int8-sparse", action="store_true", help="Use INT8 quantized sparse backend (bonus, additional ~1.5-2x)")
@@ -54,6 +55,7 @@ def main() -> int:
         quantize=args.quantize,
         prune=args.prune,
         struct_prune=args.struct_prune,
+        conv_prune=args.conv_prune,
         lowrank=args.lowrank,
         max_speed=args.max_speed,
     )
@@ -241,7 +243,7 @@ def main() -> int:
     if before.latency_ms > 0:
         speedup = before.latency_ms / after.latency_ms
         print(f"Speedup:   {speedup:.2f}x")
-        if effective_prune is not None and not use_native_sparse and speedup < 5.0:
+        if effective_prune is not None and not use_native_sparse and not args.conv_prune and not args.max_speed and speedup < 5.0:
             print()
             print("Note: Pruned model runs with ONNX Runtime (dense). For 5–25× use a sparse backend.")
         if speedup < 1.0:

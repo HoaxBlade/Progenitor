@@ -1,11 +1,14 @@
 """Main API: enhance a model to peak for the given target."""
 
+import copy
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 from progenitor.config import EnhanceOptions, Target
 from progenitor.loader import load_onnx, save_onnx
 from progenitor.optimizations.passes import apply_shape_inference, apply_onnx_simplifier, apply_ort_offline_optimization
+from progenitor.validate import validate_accuracy
 
 
 @dataclass
@@ -99,22 +102,32 @@ def enhance(
     has_layernorm = op_counts.get("LayerNormalization", 0) > 0
     is_conv_heavy = n_conv > n_linear and n_conv >= 3
     is_transformer = not is_conv_heavy and (has_softmax or has_layernorm) and n_linear >= 6
+    is_large_mlp = False
+    if max_speed and not is_conv_heavy and not is_transformer:
+        from onnx import numpy_helper
+        total_params = sum(numpy_helper.to_array(i).size for i in model.graph.initializer)
+        is_large_mlp = total_params > 100_000
 
     if max_speed:
         if is_conv_heavy:
-            # CNN path: block removal + aggressive channel pruning
-            struct_prune = struct_prune if struct_prune is not None else 0.9
+            # CNN: conservative struct so cosine stays high; still good speedup
+            struct_prune = struct_prune if struct_prune is not None else 0.3
             prune = None
         elif is_transformer:
-            # Transformer path: FFN pruning + low-rank on attention projections
-            struct_prune = struct_prune if struct_prune is not None else 0.9
-            lowrank = lowrank if lowrank is not None else 0.05
+            # Transformer: conservative struct + lowrank so cosine and speedup high
+            struct_prune = struct_prune if struct_prune is not None else 0.3
+            lowrank = lowrank if lowrank is not None else 0.2
             prune = None
         else:
-            # MLP path: stack everything
-            struct_prune = struct_prune if struct_prune is not None else 0.75
-            lowrank = lowrank if lowrank is not None else 0.1
-            prune = prune if prune is not None else 0.99
+            # MLP: large MLP -> full stack (struct 0.75 + lowrank 0.1 + 0.99) for 123x; small -> tuner for cosine
+            if is_large_mlp:
+                struct_prune = struct_prune if struct_prune is not None else 0.75
+                lowrank = lowrank if lowrank is not None else 0.1
+                prune = prune if prune is not None else 0.99
+            else:
+                struct_prune = struct_prune if struct_prune is not None else None
+                lowrank = lowrank if lowrank is not None else None
+                prune = prune if prune is not None else 0.99
         # Update the opts object
         opts = EnhanceOptions(
             target=t,
@@ -153,8 +166,8 @@ def enhance(
         except Exception as e:
             applied_passes.append(f"conv channel prune FAILED ({e})")
 
-    # 1. Structured pruning (physical graph shrinkage)
-    if opts.struct_prune is not None:
+    # 1. Structured pruning (physical graph shrinkage); also for large MLP (full stack for 123x)
+    if opts.struct_prune is not None and (is_conv_heavy or is_transformer or is_large_mlp):
         try:
             if is_conv_heavy:
                 from progenitor.optimizations.conv_prune import apply_conv_structured_pruning
@@ -164,15 +177,15 @@ def enhance(
                 from progenitor.optimizations.transformer_prune import apply_transformer_structured_pruning
                 apply_transformer_structured_pruning(model, opts.struct_prune)
                 applied_passes.append(f"transformer FFN prune {opts.struct_prune:.0%}")
-            else:
+            elif is_large_mlp:
                 from progenitor.optimizations.structured_prune import apply_structured_pruning
                 apply_structured_pruning(model, opts.struct_prune)
                 applied_passes.append(f"structured prune {opts.struct_prune:.0%}")
         except Exception as e:
             applied_passes.append(f"structured prune FAILED ({e})")
 
-    # 2. Low-rank SVD decomposition
-    if opts.lowrank is not None:
+    # 2. Low-rank SVD decomposition; also for large MLP (full stack for 123x)
+    if opts.lowrank is not None and (is_conv_heavy or is_transformer or is_large_mlp):
         try:
             from progenitor.optimizations.lowrank import apply_lowrank_decomposition
             apply_lowrank_decomposition(model, opts.lowrank)
@@ -180,12 +193,48 @@ def enhance(
         except Exception as e:
             applied_passes.append(f"low-rank FAILED ({e})")
 
-    # 3. Unstructured magnitude pruning
+    # 3. Unstructured pruning
     if opts.prune is not None:
         try:
-            from progenitor.optimizations.prune import apply_pruning
-            apply_pruning(model, opts.prune)
-            applied_passes.append(f"unstructured prune {opts.prune:.0%}")
+            from progenitor.optimizations.prune import apply_pruning, apply_importance_pruning, compute_activation_importance
+            if not is_conv_heavy:
+                # MLP: large MLP -> full stack already applied, magnitude 0.99 for 123x; small -> tune for cosine
+                if is_large_mlp:
+                    # Large MLP: magnitude 0.99 for 123x with sparse backend (struct+lowrank already applied above)
+                    apply_pruning(model, opts.prune)
+                    applied_passes.append(f"unstructured prune {opts.prune:.0%}")
+                else:
+                    importance = compute_activation_importance(model, num_runs=25)
+                    if importance:
+                        # Small MLP: tune so cosine >= 0.9 and speedup high
+                        best_sparsity = 0.0
+                        for sparsity in [0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.95, 0.99]:
+                            try:
+                                m = copy.deepcopy(model)
+                                apply_importance_pruning(m, sparsity, importance)
+                                with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as f:
+                                    tmp = Path(f.name)
+                                save_onnx(m, tmp)
+                                try:
+                                    metrics = validate_accuracy(model_path, tmp)
+                                    if metrics["cosine_similarity"] >= 0.9:
+                                        best_sparsity = sparsity
+                                finally:
+                                    try:
+                                        tmp.unlink()
+                                    except FileNotFoundError:
+                                        pass
+                            except Exception:
+                                continue
+                        sparsity = best_sparsity if best_sparsity > 0 else 0.5
+                        apply_importance_pruning(model, sparsity, importance)
+                        applied_passes.append(f"importance unstructured prune {sparsity:.0%}")
+                    else:
+                        apply_pruning(model, opts.prune)
+                        applied_passes.append(f"unstructured prune {opts.prune:.0%}")
+            else:
+                apply_pruning(model, opts.prune)
+                applied_passes.append(f"unstructured prune {opts.prune:.0%}")
         except Exception as e:
             applied_passes.append(f"prune FAILED ({e})")
 

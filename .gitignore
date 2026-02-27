@@ -32,6 +32,7 @@ examples/*.onnx.data
 # IDE and editors
 .idea/
 .vscode/
+.cursor/
 *.swp
 *.swo
 

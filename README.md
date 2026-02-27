@@ -37,7 +37,16 @@ progenitor enhance path/to/model.onnx --target cpu --quantize -o path/to/model_q
 python benchmarks/run.py path/to/model.onnx --target cpu --quantize --repeat 50
 ```
 
-All timings are real; no hardcoded numbers. Pruning (same model, sparse) for higher speedup is planned.
+All timings are real; no hardcoded numbers.
+
+**Pruning (smaller model, same graph):** Same model with many weights set to zero. Benchmark runs **before vs after** with the same runtime (ORT), so you see the effect of graph opts on the pruned file; speedup is usually ~1×. The pruned ONNX is valid and ready for sparse backends.
+
+```bash
+progenitor enhance path/to/model.onnx --prune 0.9 -o model_pruned.onnx
+python benchmarks/run.py path/to/model.onnx --prune 0.9
+```
+
+For **5–15×** you must run the pruned model with a sparse-capable backend (e.g. Intel CPU + `pip install sparse-dot-mkl` and MKL runtime). The benchmark does not use that by default.
 
 **Python API:**
 

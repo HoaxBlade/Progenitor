@@ -36,4 +36,7 @@ class EnhanceOptions:
     quantize: bool = False
     static_quantize: bool = False
     prune: float | None = None  # e.g. 0.9 = 90% sparsity (zeros)
+    struct_prune: float | None = None  # e.g. 0.5 = remove 50% of hidden neurons
+    lowrank: float | None = None  # e.g. 0.25 = keep top 25% singular values
+    max_speed: bool = False  # chain all passes for maximum speedup
     graph_optimization_level: int = 99  # ORT_ALL

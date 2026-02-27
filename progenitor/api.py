@@ -58,8 +58,8 @@ def enhance(
         del model_tmp
 
         if is_cnn:
-            # CNN: only conv channel pruning provides real speedup
-            conv_prune = conv_prune if conv_prune is not None else 0.3
+            # CNN: single conv channel prune for >2x with high cosine (no double pass)
+            conv_prune = conv_prune if conv_prune is not None else 0.5
         else:
             # MLP: all passes contribute to speedup
             struct_prune = struct_prune if struct_prune is not None else 0.75
@@ -110,13 +110,13 @@ def enhance(
 
     if max_speed:
         if is_conv_heavy:
-            # CNN: conservative struct so cosine stays high; still good speedup
-            struct_prune = struct_prune if struct_prune is not None else 0.3
+            # CNN: one conv pass only (0.5); no second struct pass so cosine stays high
+            struct_prune = struct_prune if struct_prune is not None else None
             prune = None
         elif is_transformer:
-            # Transformer: conservative struct + lowrank so cosine and speedup high
-            struct_prune = struct_prune if struct_prune is not None else 0.3
-            lowrank = lowrank if lowrank is not None else 0.2
+            # Transformer: light struct + conservative lowrank for high cosine and good speedup
+            struct_prune = 0.25
+            lowrank = 0.4  # keep 40% singular values to preserve cosine
             prune = None
         else:
             # MLP: large MLP -> full stack (struct 0.75 + lowrank 0.1 + 0.99) for 123x; small -> tuner for cosine
@@ -128,7 +128,7 @@ def enhance(
                 struct_prune = struct_prune if struct_prune is not None else None
                 lowrank = lowrank if lowrank is not None else None
                 prune = prune if prune is not None else 0.99
-        # Update the opts object
+        # Update the opts object (preserve conv_prune for CNN)
         opts = EnhanceOptions(
             target=t,
             output_path=opts.output_path,
@@ -136,6 +136,7 @@ def enhance(
             static_quantize=static_quantize,
             prune=prune,
             struct_prune=struct_prune,
+            conv_prune=opts.conv_prune,
             lowrank=lowrank,
             max_speed=max_speed,
         )

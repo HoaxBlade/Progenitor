@@ -149,7 +149,7 @@ def main() -> int:
         if args.max_speed and use_int8_sparse:
             after_label = "MAX SPEED + INT8 sparse (Native SparseBLAS)"
         elif args.max_speed and use_native_sparse:
-            after_label = "MAX SPEED: struct-prune + low-rank + sparse (Native SparseBLAS)"
+            after_label = "MAX SPEED: struct-prune + low-rank + sparse (Native C)"
         elif args.max_speed:
             after_label = "MAX SPEED: struct-prune + low-rank + unstructured prune"
         elif args.quantize:
@@ -157,7 +157,7 @@ def main() -> int:
         elif effective_prune is not None and use_int8_sparse:
             after_label = f"pruned {effective_prune:.0%} INT8 sparse (Native)"
         elif effective_prune is not None and use_native_sparse:
-            after_label = f"pruned {effective_prune:.0%} sparsity (Native SparseBLAS)"
+            after_label = f"pruned {effective_prune:.0%} sparsity (Native C)"
         elif effective_prune is not None:
             after_label = f"pruned {effective_prune:.0%} sparsity"
         else:

@@ -28,6 +28,7 @@ def enhance(
     static_quantize: bool = False,
     prune: float | None = None,
     struct_prune: float | None = None,
+    conv_prune: float | None = None,
     lowrank: float | None = None,
     max_speed: bool = False,
 ) -> EnhanceResult:
@@ -44,6 +45,7 @@ def enhance(
     t = Target.from_id(target) if isinstance(target, str) else target
 
     if max_speed:
+        conv_prune = conv_prune if conv_prune is not None else 0.5
         struct_prune = struct_prune if struct_prune is not None else 0.75
         lowrank = lowrank if lowrank is not None else 0.1
         prune = prune if prune is not None else 0.99
@@ -55,6 +57,7 @@ def enhance(
         static_quantize=static_quantize,
         prune=prune,
         struct_prune=struct_prune,
+        conv_prune=conv_prune,
         lowrank=lowrank,
         max_speed=max_speed,
     )
@@ -90,6 +93,15 @@ def enhance(
     out = Path(out)
 
     applied_passes: list[str] = []
+
+    # 0. Conv channel pruning (physically shrink Conv kernels)
+    if opts.conv_prune is not None:
+        try:
+            from progenitor.optimizations.conv_channel_prune import apply_conv_channel_pruning
+            n_pruned = apply_conv_channel_pruning(model, opts.conv_prune)
+            applied_passes.append(f"conv channel prune {opts.conv_prune:.0%} ({n_pruned} layers)")
+        except Exception as e:
+            applied_passes.append(f"conv channel prune FAILED ({e})")
 
     # 1. Structured pruning (physical graph shrinkage)
     if opts.struct_prune is not None:
@@ -130,7 +142,7 @@ def enhance(
             output_path=out,
             target=t,
             compatible=True,
-            message=f"Pruned to {opts.prune:.0%} sparsity. Same graph; benchmark runs it with ORT (dense). For 5–15× use a sparse backend (e.g. Intel + sparse-dot-mkl). Validate accuracy.",
+            message=msg,
         )
 
     if opts.static_quantize:

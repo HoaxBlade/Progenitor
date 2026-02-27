@@ -25,6 +25,7 @@ def enhance(
     *,
     output_path: str | Path | None = None,
     quantize: bool = False,
+    static_quantize: bool = False,
     prune: float | None = None,
 ) -> EnhanceResult:
     """
@@ -44,6 +45,7 @@ def enhance(
         target=t,
         output_path=Path(output_path) if output_path else None,
         quantize=quantize,
+        static_quantize=static_quantize,
         prune=prune,
     )
 
@@ -64,7 +66,9 @@ def enhance(
 
     out = opts.output_path
     if out is None:
-        if opts.quantize:
+        if opts.static_quantize:
+            suffix = "_static_quantized.onnx"
+        elif opts.quantize:
             suffix = "_quantized.onnx"
         elif opts.prune is not None:
             suffix = "_pruned.onnx"
@@ -94,6 +98,27 @@ def enhance(
             compatible=True,
             message=f"Pruned to {opts.prune:.0%} sparsity. Same graph; benchmark runs it with ORT (dense). For 5–15× use a sparse backend (e.g. Intel + sparse-dot-mkl). Validate accuracy.",
         )
+
+    if opts.static_quantize:
+        try:
+            from progenitor.optimizations.quantize import apply_static_quantization
+            apply_static_quantization(model, out)
+            return EnhanceResult(
+                input_path=model_path,
+                output_path=out,
+                target=t,
+                compatible=True,
+                message="Quantized statically (INT8/UInt8). Peak CPU vector performance. Validate accuracy on real data.",
+            )
+        except Exception as e:
+            save_onnx(model, out)
+            return EnhanceResult(
+                input_path=model_path,
+                output_path=out,
+                target=t,
+                compatible=True,
+                message=f"Static quantization failed ({e}); saved graph-enhanced FP32 only.",
+            )
 
     if opts.quantize:
         try:

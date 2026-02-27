@@ -29,6 +29,7 @@ def main() -> int:
     ap.add_argument("--verbose", "-v", action="store_true", help="Print raw sample timings to show measurements are live")
     ap.add_argument("--live", "-l", action="store_true", help="Stream each run's latency in real time as the benchmark runs")
     ap.add_argument("--quantize", "-q", action="store_true", help="Use INT8 quantization for 'after' (2–4x on CPU)")
+    ap.add_argument("--static-quantize", "-sq", action="store_true", help="Use Static INT8 quantization for 'after' (much faster on CPU)")
     ap.add_argument("--prune", "-p", type=float, default=None, metavar="SPARSITY", help="Use magnitude pruning for 'after', e.g. 0.9 = 90%% zeros (sparse inference for 5–15×)")
     ap.add_argument("--validate", action="store_true", help="Validate accuracy degradation (MSE) between baseline and enhanced model.")
     args = ap.parse_args()
@@ -40,7 +41,7 @@ def main() -> int:
         print("Error: --prune must be between 0 and 1", file=sys.stderr)
         return 1
 
-    result = enhance(args.model, args.target, quantize=args.quantize, prune=args.prune)
+    result = enhance(args.model, args.target, quantize=args.quantize, static_quantize=args.static_quantize, prune=args.prune)
     if not result.compatible:
         print(f"Error: {result.message}", file=sys.stderr)
         return 1

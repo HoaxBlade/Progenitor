@@ -54,3 +54,30 @@ def test_enhance_default_output_path() -> None:
         assert result.compatible is True
         assert result.output_path == Path(d) / "m_enhanced.onnx"
         assert result.output_path.exists()
+
+
+def test_enhance_with_prune() -> None:
+    """Pruning produces a model with zeros in weight initializers."""
+    import numpy as np
+    from onnx import numpy_helper
+    with tempfile.TemporaryDirectory() as d:
+        model_path = Path(d) / "small.onnx"
+        X = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 4])
+        W = numpy_helper.from_array(np.random.randn(4, 8).astype(np.float32) * 0.1, "W")
+        node = helper.make_node("MatMul", ["x", "W"], ["y"])
+        out = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 8])
+        graph = helper.make_graph([node], "min", [X], [out], initializer=[W])
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 14)])
+        onnx_save(model, str(model_path))
+
+        result = enhance(model_path, "cpu", output_path=Path(d) / "pruned.onnx", prune=0.9)
+        assert result.compatible is True
+        loaded = load_onnx(result.output_path)
+        zeros, total = 0, 0
+        for init in loaded.graph.initializer:
+            arr = numpy_helper.to_array(init)
+            if arr.ndim >= 2 and arr.dtype in (np.float32, np.float64):
+                zeros += int(np.sum(arr == 0))
+                total += arr.size
+        assert total > 0
+        assert zeros / total >= 0.85  # ~90% sparsity with some tolerance

@@ -34,4 +34,5 @@ class EnhanceOptions:
     target: Target
     output_path: Path | None = None
     quantize: bool = False
+    prune: float | None = None  # e.g. 0.9 = 90% sparsity (zeros)
     graph_optimization_level: int = 99  # ORT_ALL

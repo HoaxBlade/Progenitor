@@ -28,13 +28,17 @@ def main() -> int:
     ap.add_argument("--verbose", "-v", action="store_true", help="Print raw sample timings to show measurements are live")
     ap.add_argument("--live", "-l", action="store_true", help="Stream each run's latency in real time as the benchmark runs")
     ap.add_argument("--quantize", "-q", action="store_true", help="Use INT8 quantization for 'after' (2–4x on CPU)")
+    ap.add_argument("--prune", "-p", type=float, default=None, metavar="SPARSITY", help="Use magnitude pruning for 'after', e.g. 0.9 = 90%% zeros (sparse inference for 5–15×)")
     args = ap.parse_args()
 
     if not args.model.exists():
         print(f"Error: not found: {args.model}", file=sys.stderr)
         return 1
+    if args.prune is not None and (args.prune < 0 or args.prune > 1):
+        print("Error: --prune must be between 0 and 1", file=sys.stderr)
+        return 1
 
-    result = enhance(args.model, args.target, quantize=args.quantize)
+    result = enhance(args.model, args.target, quantize=args.quantize, prune=args.prune)
     if not result.compatible:
         print(f"Error: {result.message}", file=sys.stderr)
         return 1
@@ -65,6 +69,8 @@ def main() -> int:
         print(f"Model: {args.model}  Target: {args.target}  Warmup: {args.warmup}  Repeat: {args.repeat}")
         if args.quantize:
             print("Mode: INT8 quantized 'after' (same device, 2–4x typical on CPU)")
+        if args.prune is not None:
+            print(f"Mode: Pruned {args.prune:.0%} sparsity 'after' (sparse inference for 5–15×)")
         print()
 
     # Before: original model, no graph opts (same device)
@@ -88,7 +94,12 @@ def main() -> int:
 
     # After: enhanced or quantized, same device
     if args.live:
-        after_label = "quantized INT8" if args.quantize else "enhanced, full graph opts"
+        if args.quantize:
+            after_label = "quantized INT8"
+        elif args.prune is not None:
+            after_label = f"pruned {args.prune:.0%} sparsity"
+        else:
+            after_label = "enhanced, full graph opts"
         print("After (" + after_label + "):")
     after_out = run_metrics(
         result.output_path,
@@ -122,11 +133,17 @@ def main() -> int:
     if before.latency_ms > 0:
         speedup = before.latency_ms / after.latency_ms
         print(f"Speedup:   {speedup:.2f}x")
+        if args.prune is not None and speedup < 5.0:
+            print()
+            print("Note: Pruned model is run with dense kernels here. For 5–15× you need sparse inference (e.g. sparse backend).")
         if speedup < 1.0:
             print()
             if args.quantize:
                 print("Note: 'After' (quantized) is slower here. On some CPUs (e.g. Mac, or without Intel VNNI)")
                 print("  INT8 can be slower than FP32. Use graph-only enhance instead: omit --quantize.")
+            elif args.prune is not None:
+                print("Note: 'After' (pruned) is slower here. ONNX Runtime runs pruned weights as dense by default.")
+                print("  For 5–15× use a sparse backend or sparse kernels; see docs.")
             else:
                 print("Note: 'After' is slower here. This often happens for very small models (e.g. tiny.onnx):")
                 print("  full graph optimization adds overhead that doesn't pay off for a single op.")

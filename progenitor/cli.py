@@ -20,6 +20,7 @@ def main() -> None:
     p.add_argument("--target", "-t", default="cpu", choices=("cpu", "cuda"), help="Hardware target (default: cpu)")
     p.add_argument("--output", "-o", type=Path, default=None, help="Output path for enhanced model (default: <model>_enhanced.onnx)")
     p.add_argument("--quantize", action="store_true", help="Apply INT8 quantization (2–4x on CPU)")
+    p.add_argument("--prune", type=float, default=None, metavar="SPARSITY", help="Magnitude pruning, e.g. 0.9 = 90%% zeros (sparse inference for 5–15×)")
     p.set_defaults(func=_cmd_enhance)
 
     args = parser.parse_args()
@@ -27,11 +28,15 @@ def main() -> None:
 
 
 def _cmd_enhance(args: argparse.Namespace) -> None:
+    if args.prune is not None and (args.prune < 0 or args.prune > 1):
+        print("Error: --prune must be between 0 and 1 (e.g. 0.9 for 90%% sparsity)", file=sys.stderr)
+        sys.exit(1)
     result = enhance(
         args.model,
         args.target,
         output_path=args.output,
         quantize=args.quantize,
+        prune=args.prune,
     )
     if not result.compatible:
         print(result.message, file=sys.stderr)

@@ -19,7 +19,14 @@ class EnhanceResult:
     message: str
 
 
-def enhance(model_path: str | Path, target: str | Target, *, output_path: str | Path | None = None, quantize: bool = False) -> EnhanceResult:
+def enhance(
+    model_path: str | Path,
+    target: str | Target,
+    *,
+    output_path: str | Path | None = None,
+    quantize: bool = False,
+    prune: float | None = None,
+) -> EnhanceResult:
     """
     Expose a compatible ONNX model to Progenitor; produce an optimized artifact for the target.
 
@@ -27,12 +34,18 @@ def enhance(model_path: str | Path, target: str | Target, *, output_path: str | 
     - target: "cpu" or "cuda"
     - output_path: where to write the enhanced .onnx (default: same dir as model, name with _enhanced suffix)
     - quantize: if True, apply INT8 dynamic quantization (2–4x on CPU).
+    - prune: if set (e.g. 0.9), magnitude-based pruning to that sparsity (90% zeros); use sparse inference for 5–15×.
 
     Returns EnhanceResult with output_path and compatibility info.
     """
     model_path = Path(model_path)
     t = Target.from_id(target) if isinstance(target, str) else target
-    opts = EnhanceOptions(target=t, output_path=Path(output_path) if output_path else None, quantize=quantize)
+    opts = EnhanceOptions(
+        target=t,
+        output_path=Path(output_path) if output_path else None,
+        quantize=quantize,
+        prune=prune,
+    )
 
     try:
         model = load_onnx(model_path)
@@ -50,9 +63,36 @@ def enhance(model_path: str | Path, target: str | Target, *, output_path: str | 
 
     out = opts.output_path
     if out is None:
-        suffix = "_quantized.onnx" if opts.quantize else "_enhanced.onnx"
+        if opts.quantize:
+            suffix = "_quantized.onnx"
+        elif opts.prune is not None:
+            suffix = "_pruned.onnx"
+        else:
+            suffix = "_enhanced.onnx"
         out = model_path.parent / f"{model_path.stem}{suffix}"
     out = Path(out)
+
+    if opts.prune is not None:
+        try:
+            from progenitor.optimizations.prune import apply_pruning
+            apply_pruning(model, opts.prune)
+        except Exception as e:
+            save_onnx(model, out)
+            return EnhanceResult(
+                input_path=model_path,
+                output_path=out,
+                target=t,
+                compatible=True,
+                message=f"Pruning failed ({e}); saved graph-enhanced only.",
+            )
+        save_onnx(model, out)
+        return EnhanceResult(
+            input_path=model_path,
+            output_path=out,
+            target=t,
+            compatible=True,
+            message=f"Pruned to {opts.prune:.0%} sparsity. Same graph. For 5–15× speedup you need a sparse backend (ORT runs dense by default). Validate accuracy.",
+        )
 
     if opts.quantize:
         try:

@@ -72,7 +72,7 @@ def main() -> int:
         if args.quantize:
             print("Mode: INT8 quantized 'after' (same device, 2–4x typical on CPU)")
         if args.prune is not None:
-            print(f"Mode: Pruned {args.prune:.0%} sparsity 'after' (sparse inference for 5–15×)")
+            print(f"Mode: Pruned {args.prune:.0%} sparsity 'after' (ORT, same runtime as before)")
         print()
 
     # Before: original model, no graph opts (same device)
@@ -94,7 +94,7 @@ def main() -> int:
     if args.live:
         print()
 
-    # After: enhanced or quantized, same device
+    # After: enhanced, quantized, or pruned — always ORT (same runtime as before)
     if args.live:
         if args.quantize:
             after_label = "quantized INT8"
@@ -113,8 +113,10 @@ def main() -> int:
         return_raw_times=args.verbose or args.live,
         on_sample=on_sample_after,
     )
-    after = after_out[0] if (args.verbose or args.live) else after_out
-    after_times = after_out[1] if (args.verbose or args.live) else None
+    if isinstance(after_out, tuple):
+        after, after_times = after_out[0], after_out[1]
+    else:
+        after, after_times = after_out, None
 
     if args.live:
         print()
@@ -149,15 +151,14 @@ def main() -> int:
         print(f"Speedup:   {speedup:.2f}x")
         if args.prune is not None and speedup < 5.0:
             print()
-            print("Note: Pruned model is run with dense kernels here. For 5–15× you need sparse inference (e.g. sparse backend).")
+            print("Note: Pruned model runs with ONNX Runtime (dense). For 5–15× use a sparse backend (e.g. Intel CPU + pip install sparse-dot-mkl).")
         if speedup < 1.0:
             print()
             if args.quantize:
                 print("Note: 'After' (quantized) is slower here. On some CPUs (e.g. Mac, or without Intel VNNI)")
                 print("  INT8 can be slower than FP32. Use graph-only enhance instead: omit --quantize.")
             elif args.prune is not None:
-                print("Note: 'After' (pruned) is slower here. ONNX Runtime runs pruned weights as dense by default.")
-                print("  For 5–15× use a sparse backend or sparse kernels; see docs.")
+                print("Note: 'After' (pruned) is slower here. ORT runs pruned weights as dense; use a sparse backend for 5–15×.")
             else:
                 print("Note: 'After' is slower here. This often happens for very small models (e.g. tiny.onnx):")
                 print("  full graph optimization adds overhead that doesn't pay off for a single op.")

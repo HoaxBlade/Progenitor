@@ -92,7 +92,7 @@ def enhance(
             output_path=out,
             target=t,
             compatible=True,
-            message=f"Pruned to {opts.prune:.0%} sparsity. Same graph. For 5–15× speedup you need a sparse backend (ORT runs dense by default). Validate accuracy.",
+            message=f"Pruned to {opts.prune:.0%} sparsity. Same graph; benchmark runs it with ORT (dense). For 5–15× use a sparse backend (e.g. Intel + sparse-dot-mkl). Validate accuracy.",
         )
 
     if opts.quantize:

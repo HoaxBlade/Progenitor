@@ -27,6 +27,7 @@ htmlcov/
 
 # ONNX models (generated or downloaded; often large)
 examples/*.onnx
+examples/*.onnx.data
 
 # IDE and editors
 .idea/

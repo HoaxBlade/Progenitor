@@ -158,5 +158,11 @@ def apply_lowrank_decomposition(model: ModelProto, rank_ratio: float = 0.25) -> 
     del model.graph.initializer[:]
     model.graph.initializer.extend(new_inits)
 
+    # Remove replaced initializer names from graph.input (prevents ORT "duplicate" warnings
+    # and allows const folding on the new factored weights).
+    new_graph_inputs = [inp for inp in model.graph.input if inp.name not in inits_to_remove]
+    del model.graph.input[:]
+    model.graph.input.extend(new_graph_inputs)
+
     # Clear stale value_info — new intermediate tensors added, shapes changed.
     del model.graph.value_info[:]

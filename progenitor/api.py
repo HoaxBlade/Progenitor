@@ -193,15 +193,61 @@ def enhance(
     out = Path(out)
 
     applied_passes: list[str] = []
+    # CNN max_speed: validation-guided passes use intermediate cosine threshold; output calibration restores final cosine so it is not compromised
+    _cnn_cosine_threshold = 0.86
+    _enable_block_removal = True
 
-    # 0. Conv channel pruning (physically shrink Conv bottleneck kernels)
+    # 0a. Conv channel pruning first (biggest win); validation-guided for CNN max_speed to preserve final cosine
     if opts.conv_prune is not None:
         try:
             from progenitor.optimizations.conv_prune import apply_conv_structured_pruning
-            apply_conv_structured_pruning(model, opts.conv_prune)
-            applied_passes.append(f"conv channel prune {opts.conv_prune:.0%}")
+            if is_conv_heavy and max_speed:
+                best_conv_ratio = None
+                for ratio in [0.5, 0.55, 0.6, 0.65, 0.7]:
+                    m = copy.deepcopy(model)
+                    apply_conv_structured_pruning(m, ratio)
+                    with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as f:
+                        tmp = Path(f.name)
+                    try:
+                        save_onnx(m, tmp)
+                        metrics = validate_accuracy(model_path, tmp)
+                        # Threshold for intermediate (pre-calibration) model; calibration later restores cosine
+                        if metrics["cosine_similarity"] >= _cnn_cosine_threshold:
+                            best_conv_ratio = ratio
+                    finally:
+                        tmp.unlink(missing_ok=True)
+                if best_conv_ratio is not None:
+                    apply_conv_structured_pruning(model, best_conv_ratio)
+                    applied_passes.append(f"conv channel prune {best_conv_ratio:.0%}")
+                # else skip conv prune to avoid compromising cosine
+            else:
+                apply_conv_structured_pruning(model, opts.conv_prune)
+                applied_passes.append(f"conv channel prune {opts.conv_prune:.0%}")
         except Exception as e:
             applied_passes.append(f"conv channel prune FAILED ({e})")
+
+    # 0b. Validation-guided block removal (CNN max_speed only). Uses _cnn_cosine_threshold; calibration restores final cosine.
+    if _enable_block_removal and is_conv_heavy and max_speed and applied_passes:
+        try:
+            from progenitor.optimizations.block_removal import apply_block_removal
+            best_block_ratio = 0.0
+            for ratio in [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4]:
+                m = copy.deepcopy(model)
+                apply_block_removal(m, ratio)
+                with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as f:
+                    tmp = Path(f.name)
+                try:
+                    save_onnx(m, tmp)
+                    metrics = validate_accuracy(model_path, tmp)
+                    if metrics["cosine_similarity"] >= _cnn_cosine_threshold:
+                        best_block_ratio = ratio
+                finally:
+                    tmp.unlink(missing_ok=True)
+            if best_block_ratio > 0:
+                apply_block_removal(model, best_block_ratio)
+                applied_passes.append(f"block removal {best_block_ratio:.0%}")
+        except Exception as e:
+            applied_passes.append(f"block removal FAILED ({e})")
 
     # 1. Structured pruning (physical graph shrinkage); also large MLP and aggressive small MLP/transformer
     if opts.struct_prune is not None and (is_conv_heavy or is_transformer or is_large_mlp or (not is_conv_heavy and not is_transformer and not is_large_mlp)):

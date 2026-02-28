@@ -1,78 +1,78 @@
 {
   "small_mlp": {
     "baseline": {
-      "latency_ms": 0.042550000216579065,
+      "latency_ms": 0.043649999497574754,
       "speedup": 1.0,
       "cosine": 1.0,
       "top1_match": true,
       "mse": 0.0
     },
     "conv-prune 30%": {
-      "latency_ms": 0.0427999993917183,
-      "speedup": 1.011682268361418,
+      "latency_ms": 0.04065000030095689,
+      "speedup": 1.0479704866398474,
       "cosine": 1.0000000000000002,
       "top1_match": true,
       "mse": 0.0,
       "message": "Applied: conv channel prune 30%."
     },
     "struct-prune 50%": {
-      "latency_ms": 0.04175000049144728,
-      "speedup": 0.9940119523069262,
-      "cosine": 0.5333527628929593,
+      "latency_ms": 0.04000000080850441,
+      "speedup": 1.0349999929514162,
+      "cosine": 0.5724593881626329,
       "top1_match": false,
-      "mse": 0.09635022296000757,
+      "mse": 0.20719716301958782,
       "message": "Applied: structured prune 50%."
     },
     "static INT8": {
-      "latency_ms": 0.0714999987394549,
-      "speedup": 0.5986014133675117,
-      "cosine": 0.9998238319479203,
+      "latency_ms": 0.06064999979571439,
+      "speedup": 0.7188788157164284,
+      "cosine": 0.9998462768695433,
       "top1_match": true,
-      "mse": 7.9231723604267e-05,
+      "mse": 0.00010420011952614882,
       "message": "Applied: static INT8 quantization."
     },
     "max-speed": {
-      "error": "[ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Load model from <__main__.run_benchmark.<locals>.DummySess object at 0x000001B8269FCBD0> failed:Load model <__main__.run_benchmark.<locals>.DummySess object at 0x000001B8269FCBD0> failed"
+      "error": "[ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Load model from <__main__.run_benchmark.<locals>.DummySess object at 0x0000014AF80138D0> failed:Load model <__main__.run_benchmark.<locals>.DummySess object at 0x0000014AF80138D0> failed"
     }
   },
   "resnet50": {
     "baseline": {
-      "latency_ms": 30.150399999911315,
+      "latency_ms": 29.402250000202912,
       "speedup": 1.0,
       "cosine": 1.0,
       "top1_match": true,
       "mse": 0.0
     },
     "conv-prune 30%": {
-      "latency_ms": 20.191699999486445,
-      "speedup": 1.5166231669964698,
-      "cosine": 0.951864297067048,
+      "latency_ms": 30.078150000008463,
+      "speedup": 0.9993001564489665,
+      "cosine": 0.9560188541614657,
       "top1_match": false,
-      "mse": 5.684372437903932,
+      "mse": 5.390836795832618,
       "message": "Applied: conv channel prune 30%."
     },
     "struct-prune 50%": {
-      "latency_ms": 34.41575000033481,
-      "speedup": 0.8562518614293625,
-      "cosine": 1.0,
+      "latency_ms": 39.56465000010212,
+      "speedup": 0.777260761815587,
+      "cosine": 1.0000000000000002,
       "top1_match": true,
       "mse": 0.0,
       "message": "Applied: structured prune 50%."
     },
     "static INT8": {
-      "latency_ms": 49.45760000100563,
-      "speedup": 0.7056711202862188,
-      "cosine": 0.9881174373158041,
+      "latency_ms": 50.783999999111984,
+      "speedup": 0.7074216288719923,
+      "cosine": 0.9915361568755858,
       "top1_match": false,
-      "mse": 1.8787031178097766,
+      "mse": 1.3117271190192918,
       "message": "Applied: static INT8 quantization."
     },
     "max-speed": {
-      "latency_ms": 21.398449998741853,
-      "speedup": 1.5857900923426662,
-      "cosine": 0.9573030884125532,
+      "latency_ms": 22.395549999600917,
+      "speedup": 1.6220454509994648,
+      "cosine": 0.95711424359682,
       "top1_match": false,
-      "mse": 5.170616425453297,
+      "mse": 5.565332521431809,
       "message": "Applied: conv channel prune 40%."
     }
   }

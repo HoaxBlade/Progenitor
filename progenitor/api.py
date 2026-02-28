@@ -139,6 +139,11 @@ def enhance(
                 struct_prune = struct_prune if struct_prune is not None else None
                 lowrank = lowrank if lowrank is not None else None
                 prune = prune if prune is not None else 0.99
+        # Apply high-cosine workarounds by default when max_speed: per-layer + block for small MLP; calibration for CNN/transformer only (keeps small MLP sparse path)
+        _is_small_mlp = not is_conv_heavy and not is_transformer and not is_large_mlp
+        _per_layer = (opts.per_layer_tune or True) if _is_small_mlp else opts.per_layer_tune
+        _block_size = opts.block_size if opts.block_size is not None else ((4, 4) if _is_small_mlp else None)
+        _calibrate = opts.calibrate_output or ((is_conv_heavy or is_transformer) and not is_large_mlp)
         # Update the opts object (preserve conv_prune and high-cosine options)
         opts = EnhanceOptions(
             target=t,
@@ -150,9 +155,9 @@ def enhance(
             conv_prune=opts.conv_prune,
             lowrank=lowrank,
             max_speed=max_speed,
-            per_layer_tune=opts.per_layer_tune,
-            block_size=opts.block_size,
-            calibrate_output=opts.calibrate_output,
+            per_layer_tune=_per_layer,
+            block_size=_block_size,
+            calibrate_output=_calibrate,
         )
 
     out = opts.output_path

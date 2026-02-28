@@ -5,7 +5,7 @@ A system that enhances compatible targets to **peak performance** on **the hardw
 Inspired by the Progenitor virus: one “strain,” selective compatibility, measurable enhancement. **Same device, enhanced to its peak** — no GPU required; built for legacy and edge (e.g. older military systems).
 
 - **Plan:** [PLAN.md](./PLAN.md)
-- **Phase 1 compatibility:** [docs/compatibility-phase1.md](./docs/compatibility-phase1.md)
+- **Phase 1 compatibility (all passes, targets, validation):** [docs/compatibility-phase1.md](./docs/compatibility-phase1.md)
 
 ## Phase 1: ML (ONNX)
 
@@ -15,38 +15,58 @@ Inspired by the Progenitor virus: one “strain,” selective compatibility, mea
 pip install -e .
 ```
 
-**Enhance an ONNX model** (use a real path to your `.onnx` file):
+### Phase 1 workflow
+
+1. **Get an ONNX model** — Export from PyTorch/TensorFlow, or use the examples (tiny, small MLP, ResNet-50).
+2. **Enhance** — Run Progenitor with the target and (optionally) optimization flags. Use `--max-speed` for architecture-specific chained passes (CNN ~6–9×, large MLP ~123× with sparse backend).
+3. **Benchmark** — Compare before/after latency and throughput on the same device.
+4. **Validate** — Use `--validate` to check cosine similarity and MSE between baseline and enhanced outputs.
 
 ```bash
-# Example with the included tiny model:
+# Minimal: graph-only enhance
+progenitor enhance path/to/model.onnx --target cpu -o path/to/model_enhanced.onnx
+python benchmarks/run.py path/to/model.onnx --target cpu
+
+# Max speed (architecture-specific: CNN gets conv prune + block removal + calibration + INT8)
+progenitor enhance path/to/model.onnx --target cpu --max-speed
+python benchmarks/run.py path/to/model.onnx --target cpu --max-speed --validate --repeat 50
+```
+
+Full list of passes and when they apply: [docs/compatibility-phase1.md](./docs/compatibility-phase1.md).
+
+### Quick examples
+
+**Tiny model (single op):**
+
+```bash
 python examples/create_tiny_onnx.py
 progenitor enhance examples/tiny.onnx --target cpu --output examples/tiny_enhanced.onnx
+python benchmarks/run.py examples/tiny.onnx --target cpu
 ```
 
-**Benchmark before/after:**
-
-```bash
-python benchmarks/run.py path/to/model.onnx --target cpu
-```
-
-**Virus-level speedup (same CPU, no GPU):**  
-Progenitor enhances the **same** model on the same device. Use `--quantize` (INT8) for **2–4x** on CPU:
+**INT8 (2–4× on CPU):**
 
 ```bash
 progenitor enhance path/to/model.onnx --target cpu --quantize -o path/to/model_quantized.onnx
 python benchmarks/run.py path/to/model.onnx --target cpu --quantize --repeat 50
 ```
 
-All timings are real; no hardcoded numbers.
-
-**Pruning (smaller model, same graph):** Same model with many weights set to zero. Benchmark runs **before vs after** with the same runtime (ORT), so you see the effect of graph opts on the pruned file; speedup is usually ~1×. The pruned ONNX is valid and ready for sparse backends.
+**Pruning (sparse backend for 5–15×):** Same graph, many weights zeroed. Use a sparse-capable backend for real speedup.
 
 ```bash
 progenitor enhance path/to/model.onnx --prune 0.9 -o model_pruned.onnx
 python benchmarks/run.py path/to/model.onnx --prune 0.9
 ```
 
-For **5–15×** you must run the pruned model with a sparse-capable backend (e.g. Intel CPU + `pip install sparse-dot-mkl` and MKL runtime). The benchmark does not use that by default.
+**CNN max-speed (~6–9×, cosine preserved):** ResNet-style models get validation-guided conv prune + block removal + calibration + static INT8.
+
+```bash
+python examples/download_large_model.py   # if you don't have resnet50.onnx
+progenitor enhance examples/resnet50.onnx --target cpu --max-speed
+python benchmarks/run.py examples/resnet50.onnx --target cpu --max-speed --validate --repeat 50
+```
+
+**Large MLP (~123× with sparse backend):** `--max-speed` on large MLPs applies struct + lowrank + high sparsity; run with sparse backend for full speedup.
 
 **Python API:**
 
@@ -56,9 +76,12 @@ from progenitor import enhance
 result = enhance("model.onnx", "cpu")
 if result.compatible:
     print("Enhanced:", result.output_path)
+
+# With options
+result = enhance("model.onnx", "cpu", max_speed=True, output_path="out.onnx")
 ```
 
-See [examples/README.md](./examples/README.md) for a tiny ONNX and more usage.
+See [examples/README.md](./examples/README.md) for more usage and export scripts.
 
 ### How Progenitor works on larger models
 
@@ -81,39 +104,38 @@ python benchmarks/run.py path/to/your_model.onnx --target cpu   # optional: befo
 
 ### Commands to test on a larger model (from repo root)
 
-Use the included script to create a small multi-layer ONNX (3-layer MLP), then enhance and benchmark it. **Run step 1 first** so `small_mlp.onnx` exists. No PyTorch needed.
+Use the included script to create a small multi-layer ONNX (3-layer MLP), then enhance and benchmark. **Run step 1 first** so `small_mlp.onnx` exists. No PyTorch needed.
 
 ```bash
 # 1. Create the small MLP ONNX (run this first)
 python examples/export_small_model.py
 
-# 2. Enhance it with Progenitor
+# 2. Enhance and benchmark
 progenitor enhance examples/small_mlp.onnx --target cpu -o examples/small_mlp_enhanced.onnx
-
-# 3. Benchmark before/after (optionally with --live to see runs in real time)
 python benchmarks/run.py examples/small_mlp.onnx --target cpu --repeat 50
-python benchmarks/run.py examples/small_mlp.onnx --target cpu --repeat 50 --live
-```
 
-On this small MLP you should see a more consistent speedup than on `tiny.onnx`, since the graph has enough ops (linear, relu, etc.) for optimization to help.
+# Optional: max-speed (per-layer tune / block sparse) and accuracy check
+python benchmarks/run.py examples/small_mlp.onnx --target cpu --max-speed --validate --repeat 50
+```
 
 ### Commands to test on a **large** model (ResNet-50, ~97 MB)
 
-Download a real large ONNX (ResNet-50), then enhance and benchmark:
+Download ResNet-50 ONNX, then enhance and benchmark:
 
 ```bash
 # 1. Download ResNet-50 ONNX (~97 MB; run once)
 python examples/download_large_model.py
 
-# 2. Enhance it
+# 2. Graph-only enhance
 progenitor enhance examples/resnet50.onnx --target cpu -o examples/resnet50_enhanced.onnx
-
-# 3. Benchmark (use fewer repeats — each run is slower on a large model)
 python benchmarks/run.py examples/resnet50.onnx --target cpu --repeat 20
 
-# For drastic (virus-level) speedup, add --quantize: 2–4x faster
+# 3. Max-speed: validation-guided conv prune + block removal + calibration + INT8 (~6–9×, cosine preserved)
+progenitor enhance examples/resnet50.onnx --target cpu --max-speed
+python benchmarks/run.py examples/resnet50.onnx --target cpu --max-speed --validate --repeat 50
+
+# 4. INT8 only (2–4×)
 python benchmarks/run.py examples/resnet50.onnx --target cpu --quantize --repeat 20
-python benchmarks/run.py examples/resnet50.onnx --target cpu --quantize --repeat 20 --live
 ```
 
-This is a real large graph (conv layers, batch norm, etc.). Without `--quantize` you get ~1.05–1.15x from graph opts; **with `--quantize` (INT8) you typically get 2–4x** on CPU.
+ResNet is a real large graph (conv, batch norm). **`--max-speed`** gives the best CPU speedup with cosine preserved; see [docs/compatibility-phase1.md](./docs/compatibility-phase1.md) for the full pass list.

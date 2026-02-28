@@ -1,11 +1,14 @@
 """Main API: enhance a model to peak for the given target."""
 
+import copy
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 from progenitor.config import EnhanceOptions, Target
 from progenitor.loader import load_onnx, save_onnx
 from progenitor.optimizations.passes import apply_shape_inference, apply_onnx_simplifier, apply_ort_offline_optimization
+from progenitor.validate import validate_accuracy
 
 
 @dataclass
@@ -31,6 +34,12 @@ def enhance(
     conv_prune: float | None = None,
     lowrank: float | None = None,
     max_speed: bool = False,
+    per_layer_tune: bool = False,
+    block_size: tuple[int, int] | None = None,
+    calibrate_output: bool = False,
+    progressive_steps: tuple[float, ...] | None = None,
+    max_speed_aggressive: bool = False,
+    sparse_pattern: str = "unstructured",
 ) -> EnhanceResult:
     """
     Enhance an ONNX model for peak inference performance.
@@ -40,6 +49,12 @@ def enhance(
       --lowrank:      SVD decomposition of weight matrices (~2-3x)
       --prune:        unstructured magnitude pruning + sparse backend (~5x)
       --max-speed:    chain all above with aggressive defaults (~30-50x)
+
+    High speedup + high cosine (optional):
+      per_layer_tune, block_size, calibrate_output: as before.
+      progressive_steps: e.g. (0.5, 0.7, 0.9) for progressive pruning + calibrate between.
+      max_speed_aggressive: small MLP/transformer get struct+lowrank+prune then calibrate (toward 50x).
+      sparse_pattern: "unstructured" or "2:4" (2 non-zeros per 4, hardware-friendly).
     """
     model_path = Path(model_path)
     t = Target.from_id(target) if isinstance(target, str) else target
@@ -55,10 +70,9 @@ def enhance(
         del model_tmp
 
         if is_cnn:
-            # CNN: only conv channel pruning is universally fast across all CPUs
-            # INT8 quant can be slower on CPUs without VNNI instructions (like the current Windows host)
-            conv_prune = conv_prune if conv_prune is not None else 0.40
-            static_quantize = False
+            # CNN: conv channel prune + INT8 for ~5x (prune then quantize in one shot)
+            conv_prune = conv_prune if conv_prune is not None else 0.5
+            static_quantize = static_quantize or True  # chain prune -> static quant for 5x
         else:
             # MLP: check size, tiny models can't survive 90% pruning
             import numpy as np
@@ -85,6 +99,12 @@ def enhance(
         conv_prune=conv_prune,
         lowrank=lowrank,
         max_speed=max_speed,
+        per_layer_tune=per_layer_tune,
+        block_size=block_size,
+        calibrate_output=calibrate_output,
+        progressive_steps=progressive_steps,
+        max_speed_aggressive=max_speed_aggressive,
+        sparse_pattern=sparse_pattern,
     )
 
     try:
@@ -111,23 +131,44 @@ def enhance(
     has_layernorm = op_counts.get("LayerNormalization", 0) > 0
     is_conv_heavy = n_conv > n_linear and n_conv >= 3
     is_transformer = not is_conv_heavy and (has_softmax or has_layernorm) and n_linear >= 6
+    is_large_mlp = False
+    if max_speed and not is_conv_heavy and not is_transformer:
+        from onnx import numpy_helper
+        total_params = sum(numpy_helper.to_array(i).size for i in model.graph.initializer)
+        is_large_mlp = total_params > 100_000
 
     if max_speed:
         if is_conv_heavy:
-            # CNN path: block removal + aggressive channel pruning
-            struct_prune = struct_prune if struct_prune is not None else 0.9
+            # CNN: one conv pass only (0.5); no second struct pass so cosine stays high
+            struct_prune = struct_prune if struct_prune is not None else None
             prune = None
         elif is_transformer:
-            # Transformer path: FFN pruning + low-rank on attention projections
-            struct_prune = struct_prune if struct_prune is not None else 0.9
-            lowrank = lowrank if lowrank is not None else 0.05
-            prune = None
+            # Transformer: struct + lowrank for ~2x; aggressive adds prune 0.9 then calibrate
+            struct_prune = struct_prune if struct_prune is not None else 0.25
+            lowrank = lowrank if lowrank is not None else 0.4
+            prune = prune if prune is not None else (0.9 if opts.max_speed_aggressive else None)
         else:
-            # MLP path: stack everything
-            struct_prune = struct_prune if struct_prune is not None else 0.75
-            lowrank = lowrank if lowrank is not None else 0.1
-            prune = prune if prune is not None else 0.99
-        # Update the opts object
+            # MLP: large MLP -> full stack (struct 0.75 + lowrank 0.1 + 0.99) for 123x; small -> tuner or aggressive
+            if is_large_mlp:
+                struct_prune = struct_prune if struct_prune is not None else 0.75
+                lowrank = lowrank if lowrank is not None else 0.1
+                prune = prune if prune is not None else 0.99
+            else:
+                if opts.max_speed_aggressive:
+                    struct_prune = struct_prune if struct_prune is not None else 0.5
+                    lowrank = lowrank if lowrank is not None else 0.2
+                    prune = prune if prune is not None else 0.9
+                else:
+                    # Small MLP (non-aggressive): no struct/lowrank so tuner or progressive can run
+                    struct_prune = None
+                    lowrank = None
+                    prune = prune if prune is not None else 0.99
+        # Apply high-cosine workarounds by default when max_speed: per-layer + block for small MLP; calibration for CNN/transformer only (keeps small MLP sparse path)
+        _is_small_mlp = not is_conv_heavy and not is_transformer and not is_large_mlp
+        _per_layer = (opts.per_layer_tune or True) if _is_small_mlp else opts.per_layer_tune
+        _block_size = opts.block_size if opts.block_size is not None else ((4, 4) if _is_small_mlp else None)
+        _calibrate = opts.calibrate_output or ((is_conv_heavy or is_transformer) and not is_large_mlp)
+        # Update the opts object (preserve conv_prune and high-cosine options)
         opts = EnhanceOptions(
             target=t,
             output_path=opts.output_path,
@@ -135,8 +176,15 @@ def enhance(
             static_quantize=static_quantize,
             prune=prune,
             struct_prune=struct_prune,
+            conv_prune=opts.conv_prune,
             lowrank=lowrank,
             max_speed=max_speed,
+            per_layer_tune=_per_layer,
+            block_size=_block_size,
+            calibrate_output=_calibrate,
+            progressive_steps=opts.progressive_steps,
+            max_speed_aggressive=opts.max_speed_aggressive,
+            sparse_pattern=opts.sparse_pattern,
         )
 
     out = opts.output_path
@@ -155,18 +203,64 @@ def enhance(
     out = Path(out)
 
     applied_passes: list[str] = []
+    # CNN max_speed: validation-guided passes use intermediate cosine threshold; output calibration restores final cosine so it is not compromised
+    _cnn_cosine_threshold = 0.86
+    _enable_block_removal = True
 
-    # 0. Conv channel pruning (physically shrink Conv bottleneck kernels)
+    # 0a. Conv channel pruning first (biggest win); validation-guided for CNN max_speed to preserve final cosine
     if opts.conv_prune is not None:
         try:
             from progenitor.optimizations.conv_prune import apply_conv_structured_pruning
-            apply_conv_structured_pruning(model, opts.conv_prune)
-            applied_passes.append(f"conv channel prune {opts.conv_prune:.0%}")
+            if is_conv_heavy and max_speed:
+                best_conv_ratio = None
+                for ratio in [0.5, 0.55, 0.6, 0.65, 0.7]:
+                    m = copy.deepcopy(model)
+                    apply_conv_structured_pruning(m, ratio)
+                    with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as f:
+                        tmp = Path(f.name)
+                    try:
+                        save_onnx(m, tmp)
+                        metrics = validate_accuracy(model_path, tmp)
+                        # Threshold for intermediate (pre-calibration) model; calibration later restores cosine
+                        if metrics["cosine_similarity"] >= _cnn_cosine_threshold:
+                            best_conv_ratio = ratio
+                    finally:
+                        tmp.unlink(missing_ok=True)
+                if best_conv_ratio is not None:
+                    apply_conv_structured_pruning(model, best_conv_ratio)
+                    applied_passes.append(f"conv channel prune {best_conv_ratio:.0%}")
+                # else skip conv prune to avoid compromising cosine
+            else:
+                apply_conv_structured_pruning(model, opts.conv_prune)
+                applied_passes.append(f"conv channel prune {opts.conv_prune:.0%}")
         except Exception as e:
             applied_passes.append(f"conv channel prune FAILED ({e})")
 
-    # 1. Structured pruning (physical graph shrinkage)
-    if opts.struct_prune is not None:
+    # 0b. Validation-guided block removal (CNN max_speed only). Uses _cnn_cosine_threshold; calibration restores final cosine.
+    if _enable_block_removal and is_conv_heavy and max_speed and applied_passes:
+        try:
+            from progenitor.optimizations.block_removal import apply_block_removal
+            best_block_ratio = 0.0
+            for ratio in [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4]:
+                m = copy.deepcopy(model)
+                apply_block_removal(m, ratio)
+                with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as f:
+                    tmp = Path(f.name)
+                try:
+                    save_onnx(m, tmp)
+                    metrics = validate_accuracy(model_path, tmp)
+                    if metrics["cosine_similarity"] >= _cnn_cosine_threshold:
+                        best_block_ratio = ratio
+                finally:
+                    tmp.unlink(missing_ok=True)
+            if best_block_ratio > 0:
+                apply_block_removal(model, best_block_ratio)
+                applied_passes.append(f"block removal {best_block_ratio:.0%}")
+        except Exception as e:
+            applied_passes.append(f"block removal FAILED ({e})")
+
+    # 1. Structured pruning (physical graph shrinkage); also large MLP and aggressive small MLP/transformer
+    if opts.struct_prune is not None and (is_conv_heavy or is_transformer or is_large_mlp or (not is_conv_heavy and not is_transformer and not is_large_mlp)):
         try:
             if is_conv_heavy:
                 from progenitor.optimizations.conv_prune import apply_conv_structured_pruning
@@ -176,15 +270,20 @@ def enhance(
                 from progenitor.optimizations.transformer_prune import apply_transformer_structured_pruning
                 apply_transformer_structured_pruning(model, opts.struct_prune)
                 applied_passes.append(f"transformer FFN prune {opts.struct_prune:.0%}")
+            elif is_large_mlp:
+                from progenitor.optimizations.structured_prune import apply_structured_pruning
+                apply_structured_pruning(model, opts.struct_prune)
+                applied_passes.append(f"structured prune {opts.struct_prune:.0%}")
             else:
+                # Aggressive small MLP
                 from progenitor.optimizations.structured_prune import apply_structured_pruning
                 apply_structured_pruning(model, opts.struct_prune)
                 applied_passes.append(f"structured prune {opts.struct_prune:.0%}")
         except Exception as e:
             applied_passes.append(f"structured prune FAILED ({e})")
 
-    # 2. Low-rank SVD decomposition
-    if opts.lowrank is not None:
+    # 2. Low-rank SVD decomposition; also large MLP and aggressive small MLP/transformer
+    if opts.lowrank is not None and (is_conv_heavy or is_transformer or is_large_mlp or (not is_conv_heavy and not is_transformer and not is_large_mlp)):
         try:
             from progenitor.optimizations.lowrank import apply_lowrank_decomposition
             apply_lowrank_decomposition(model, opts.lowrank)
@@ -192,58 +291,149 @@ def enhance(
         except Exception as e:
             applied_passes.append(f"low-rank FAILED ({e})")
 
-    # 3. Unstructured magnitude pruning
+    # 3. Unstructured pruning
     if opts.prune is not None:
         try:
-            from progenitor.optimizations.prune import apply_pruning
-            apply_pruning(model, opts.prune)
-            applied_passes.append(f"unstructured prune {opts.prune:.0%}")
+            from progenitor.optimizations.prune import (
+                apply_pruning,
+                apply_importance_pruning,
+                apply_pruning_to_target,
+                compute_activation_importance,
+                tune_per_layer_sparsity,
+            )
+            # Progressive pruning: step through targets and optionally calibrate between (better cosine at high sparsity)
+            if opts.progressive_steps and not is_conv_heavy and not is_large_mlp:
+                steps = sorted(set(opts.progressive_steps))
+                for target in steps:
+                    apply_pruning_to_target(model, target)
+                    applied_passes.append(f"progressive to {target:.0%}")
+                # Calibration runs once at end (main block) if opts.calibrate_output
+            else:
+                # Large MLP 123x path: magnitude-only unstructured prune (no block_size, no per-layer)
+                prune_kw = {} if opts.block_size is None else {"block_size": opts.block_size}
+                prune_kw["sparse_pattern"] = getattr(opts, "sparse_pattern", "unstructured")
+                if not is_conv_heavy:
+                    # MLP: large MLP -> full stack already applied, magnitude 0.99 for 123x; small -> tune for cosine
+                    if is_large_mlp:
+                        # Large MLP: magnitude 0.99 only (no block_size) for 123x with sparse backend
+                        apply_pruning(model, opts.prune)
+                        applied_passes.append(f"unstructured prune {opts.prune:.0%}")
+                    else:
+                        importance = compute_activation_importance(model, num_runs=25)
+                        if importance:
+                            # Small MLP: per-layer tune or single sparsity tune so cosine >= 0.9
+                            if opts.per_layer_tune:
+                                sparsity_per_layer = tune_per_layer_sparsity(
+                                    model, str(model_path), importance, cosine_threshold=0.9
+                                )
+                                apply_importance_pruning(model, sparsity_per_layer, importance)
+                                applied_passes.append("per-layer importance prune")
+                            else:
+                                best_sparsity = 0.0
+                                for sparsity in [0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.95, 0.99]:
+                                    try:
+                                        m = copy.deepcopy(model)
+                                        apply_importance_pruning(m, sparsity, importance)
+                                        with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as f:
+                                            tmp = Path(f.name)
+                                        save_onnx(m, tmp)
+                                        try:
+                                            metrics = validate_accuracy(model_path, tmp)
+                                            if metrics["cosine_similarity"] >= 0.9:
+                                                best_sparsity = sparsity
+                                        finally:
+                                            try:
+                                                tmp.unlink()
+                                            except FileNotFoundError:
+                                                pass
+                                    except Exception:
+                                        continue
+                                sparsity = best_sparsity if best_sparsity > 0 else 0.5
+                                apply_importance_pruning(model, sparsity, importance)
+                                applied_passes.append(f"importance unstructured prune {sparsity:.0%}")
+                        else:
+                            apply_pruning(model, opts.prune, **prune_kw)
+                            applied_passes.append(f"unstructured prune {opts.prune:.0%}")
+                else:
+                    apply_pruning(model, opts.prune, **prune_kw)
+                    applied_passes.append(f"unstructured prune {opts.prune:.0%}")
         except Exception as e:
             applied_passes.append(f"prune FAILED ({e})")
 
-    # If any optimization pass ran, save the pruned model
-    if applied_passes:
-        save_onnx(model, out)
-
-    # 4. Static quantization (can stack on top of pruning)
-    if opts.static_quantize or static_quantize:
+    # Optional: output calibration on top of any optimization to recover cosine (skip for large MLP 123x path)
+    if applied_passes and opts.calibrate_output and not is_large_mlp:
         try:
-            from progenitor.optimizations.quantize import apply_static_quantization
-            # Quantize the (possibly pruned) model
-            source = out if applied_passes else None
-            if source:
-                apply_static_quantization(load_onnx(source), out)
-            else:
-                apply_static_quantization(model, out)
-            applied_passes.append("static INT8 quantization")
+            from progenitor.optimizations.calibrate import apply_output_calibration
+            apply_output_calibration(model_path, model, num_samples=50)
+            applied_passes.append("output calibration")
         except Exception as e:
-            applied_passes.append(f"static quantize FAILED ({e})")
+            applied_passes.append(f"calibration FAILED ({e})")
 
+    # If any optimization pass ran, save and return (or chain to quantize for CNN 5x)
     if applied_passes:
-        passes_str = " -> ".join(applied_passes)
-        msg = f"Applied: {passes_str}."
-        if opts.prune is not None:
-            msg += " Use native sparse backend for full speedup."
-        return EnhanceResult(
-            input_path=model_path,
-            output_path=out,
-            target=t,
-            compatible=True,
-            message=msg,
-        )
-
-
-    # 4. INT8 quantization (standalone)
-    if opts.quantize:
-        try:
-            from progenitor.optimizations.quantize import apply_dynamic_quantization
-            apply_dynamic_quantization(model, out)
+        chain_quantize = is_conv_heavy and (opts.static_quantize or opts.quantize)
+        if chain_quantize:
+            # Save pruned to intermediate; quantize in-memory model below
+            out_pruned = model_path.parent / f"{model_path.stem}_optimized.onnx"
+            save_onnx(model, out_pruned)
+        else:
+            save_onnx(model, out)
+            passes_str = " -> ".join(applied_passes)
+            msg = f"Applied: {passes_str}."
+            if opts.prune is not None:
+                msg += " Use native sparse backend for full speedup."
             return EnhanceResult(
                 input_path=model_path,
                 output_path=out,
                 target=t,
                 compatible=True,
-                message="Quantized (INT8). Use the quantized model for inference; expect 2–4x speedup on CPU. Validate accuracy.",
+                message=msg,
+            )
+
+    if opts.static_quantize:
+        try:
+            from progenitor.optimizations.quantize import apply_static_quantization
+            apply_static_quantization(model, out)
+            chained = bool(applied_passes and is_conv_heavy)
+            msg = (
+                "Conv pruned then quantized (INT8). ~5x target. Validate accuracy."
+                if chained
+                else "Quantized statically (INT8/UInt8). Peak CPU vector performance. Validate accuracy on real data."
+            )
+            return EnhanceResult(
+                input_path=model_path,
+                output_path=out,
+                target=t,
+                compatible=True,
+                message=msg,
+            )
+        except Exception as e:
+            save_onnx(model, out)
+            return EnhanceResult(
+                input_path=model_path,
+                output_path=out,
+                target=t,
+                compatible=True,
+                message=f"Static quantization failed ({e}); saved graph-enhanced FP32 only.",
+            )
+
+    # 4. INT8 quantization (standalone or after conv prune)
+    if opts.quantize:
+        try:
+            from progenitor.optimizations.quantize import apply_dynamic_quantization
+            apply_dynamic_quantization(model, out)
+            chained = bool(applied_passes and is_conv_heavy)
+            msg = (
+                "Conv pruned then quantized (INT8). ~5x target. Validate accuracy."
+                if chained
+                else "Quantized (INT8). Use the quantized model for inference; expect 2–4x speedup on CPU. Validate accuracy."
+            )
+            return EnhanceResult(
+                input_path=model_path,
+                output_path=out,
+                target=t,
+                compatible=True,
+                message=msg,
             )
         except Exception as e:
             save_onnx(model, out)

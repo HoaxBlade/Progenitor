@@ -41,3 +41,10 @@ class EnhanceOptions:
     lowrank: float | None = None  # e.g. 0.25 = keep top 25% singular values
     max_speed: bool = False  # chain all passes for maximum speedup
     graph_optimization_level: int = 99  # ORT_ALL
+    # High speedup + high cosine (see docs)
+    per_layer_tune: bool = False  # tune sparsity per layer for better cosine at same speedup
+    block_size: tuple[int, int] | None = None  # e.g. (4,4) for block-sparse pruning
+    calibrate_output: bool = False  # post-prune scale/bias to recover cosine
+    progressive_steps: tuple[float, ...] | None = None  # e.g. (0.5, 0.7, 0.9) for progressive pruning
+    max_speed_aggressive: bool = False  # small MLP/transformer: struct+lowrank+prune then calibrate for 50x path
+    sparse_pattern: str = "unstructured"  # "unstructured" or "2:4" (2 non-zeros per 4)

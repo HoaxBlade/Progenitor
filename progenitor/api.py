@@ -70,8 +70,9 @@ def enhance(
         del model_tmp
 
         if is_cnn:
-            # CNN: single conv channel prune for >2x with high cosine (no double pass)
+            # CNN: conv channel prune + INT8 for ~5x (prune then quantize in one shot)
             conv_prune = conv_prune if conv_prune is not None else 0.5
+            static_quantize = static_quantize or True  # chain prune -> static quant for 5x
         else:
             # MLP: all passes contribute to speedup
             struct_prune = struct_prune if struct_prune is not None else 0.75
@@ -312,31 +313,43 @@ def enhance(
         except Exception as e:
             applied_passes.append(f"calibration FAILED ({e})")
 
-    # If any optimization pass ran, save and return
+    # If any optimization pass ran, save and return (or chain to quantize for CNN 5x)
     if applied_passes:
-        save_onnx(model, out)
-        passes_str = " -> ".join(applied_passes)
-        msg = f"Applied: {passes_str}."
-        if opts.prune is not None:
-            msg += " Use native sparse backend for full speedup."
-        return EnhanceResult(
-            input_path=model_path,
-            output_path=out,
-            target=t,
-            compatible=True,
-            message=msg,
-        )
-
-    if opts.static_quantize:
-        try:
-            from progenitor.optimizations.quantize import apply_static_quantization
-            apply_static_quantization(model, out)
+        chain_quantize = is_conv_heavy and (opts.static_quantize or opts.quantize)
+        if chain_quantize:
+            # Save pruned to intermediate; quantize in-memory model below
+            out_pruned = model_path.parent / f"{model_path.stem}_optimized.onnx"
+            save_onnx(model, out_pruned)
+        else:
+            save_onnx(model, out)
+            passes_str = " -> ".join(applied_passes)
+            msg = f"Applied: {passes_str}."
+            if opts.prune is not None:
+                msg += " Use native sparse backend for full speedup."
             return EnhanceResult(
                 input_path=model_path,
                 output_path=out,
                 target=t,
                 compatible=True,
-                message="Quantized statically (INT8/UInt8). Peak CPU vector performance. Validate accuracy on real data.",
+                message=msg,
+            )
+
+    if opts.static_quantize:
+        try:
+            from progenitor.optimizations.quantize import apply_static_quantization
+            apply_static_quantization(model, out)
+            chained = bool(applied_passes and is_conv_heavy)
+            msg = (
+                "Conv pruned then quantized (INT8). ~5x target. Validate accuracy."
+                if chained
+                else "Quantized statically (INT8/UInt8). Peak CPU vector performance. Validate accuracy on real data."
+            )
+            return EnhanceResult(
+                input_path=model_path,
+                output_path=out,
+                target=t,
+                compatible=True,
+                message=msg,
             )
         except Exception as e:
             save_onnx(model, out)
@@ -348,17 +361,23 @@ def enhance(
                 message=f"Static quantization failed ({e}); saved graph-enhanced FP32 only.",
             )
 
-    # 4. INT8 quantization (standalone)
+    # 4. INT8 quantization (standalone or after conv prune)
     if opts.quantize:
         try:
             from progenitor.optimizations.quantize import apply_dynamic_quantization
             apply_dynamic_quantization(model, out)
+            chained = bool(applied_passes and is_conv_heavy)
+            msg = (
+                "Conv pruned then quantized (INT8). ~5x target. Validate accuracy."
+                if chained
+                else "Quantized (INT8). Use the quantized model for inference; expect 2–4x speedup on CPU. Validate accuracy."
+            )
             return EnhanceResult(
                 input_path=model_path,
                 output_path=out,
                 target=t,
                 compatible=True,
-                message="Quantized (INT8). Use the quantized model for inference; expect 2–4x speedup on CPU. Validate accuracy.",
+                message=msg,
             )
         except Exception as e:
             save_onnx(model, out)

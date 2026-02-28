@@ -1,5 +1,7 @@
 # Progenitor examples (Phase 1: ML)
 
+Full pass list and compatibility: [docs/compatibility-phase1.md](../docs/compatibility-phase1.md).
+
 ## Quick start
 
 1. **Enhance an ONNX model** (CLI):
@@ -18,13 +20,14 @@
        print("Enhanced:", result.output_path)
    ```
 
-3. **Benchmark before/after:**
+3. **Benchmark before/after** (optionally with accuracy validation):
 
    ```bash
    python benchmarks/run.py path/to/model.onnx --target cpu --repeat 100
+   python benchmarks/run.py path/to/model.onnx --target cpu --max-speed --validate --repeat 50
    ```
 
-   To see **real-time** updates as each run completes, use `--live` (or `-l`). To confirm numbers are not hardcoded: use `--verbose` for raw timings, or `--live` to stream every run.
+   Use `--live` to stream each run; use `--validate` to report cosine similarity and MSE between baseline and enhanced outputs.
 
 ## Getting a small ONNX model
 
@@ -73,5 +76,24 @@ progenitor enhance examples/resnet50.onnx -o examples/resnet50_enhanced.onnx
 python benchmarks/run.py examples/resnet50.onnx --target cpu --repeat 20
 ```
 
+**Max-speed (CNN ~6–9×, cosine preserved):** Validation-guided conv prune + block removal + calibration + static INT8:
+
+```bash
+progenitor enhance examples/resnet50.onnx --target cpu --max-speed
+python benchmarks/run.py examples/resnet50.onnx --target cpu --max-speed --validate --repeat 50
+```
+
+### Large MLP (~123× with sparse backend)
+
+Create and run the large MLP example; use `--max-speed` for struct + lowrank + high sparsity. Full speedup requires a sparse-capable backend.
+
+```bash
+python examples/export_large_mlp.py
+progenitor enhance examples/large_mlp.onnx --target cpu --max-speed
+python benchmarks/run.py examples/large_mlp.onnx --target cpu --max-speed
+```
+
+---
+
 **Why does tiny.onnx sometimes show *slower* "After"?**  
-`tiny.onnx` is a single Add op. Full graph optimization (fusion, constant folding, etc.) adds a small fixed overhead. For one op that overhead can outweigh any benefit, so "After" may be slower. Progenitor is meant for **larger** models (real networks with many layers), where those optimizations typically give a clear speedup.
+`tiny.onnx` is a single Add op. Full graph optimization adds a small fixed overhead. For one op that overhead can outweigh any benefit. Progenitor is meant for **larger** models (real networks with many layers), where those optimizations typically give a clear speedup.

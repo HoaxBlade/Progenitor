@@ -5,6 +5,8 @@ from progenitor.optimizations.prune import (
     apply_pruning,
     apply_importance_pruning,
     apply_block_pruning,
+    apply_pruning_to_target,
+    apply_2_4_pruning,
     tune_per_layer_sparsity,
 )
 from progenitor.optimizations.structured_prune import apply_structured_pruning
@@ -19,6 +21,8 @@ __all__ = [
     "apply_pruning",
     "apply_importance_pruning",
     "apply_block_pruning",
+    "apply_pruning_to_target",
+    "apply_2_4_pruning",
     "tune_per_layer_sparsity",
     "apply_structured_pruning",
     "apply_lowrank_decomposition",

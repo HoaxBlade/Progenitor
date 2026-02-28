@@ -42,6 +42,9 @@ def main() -> int:
     ap.add_argument("--per-layer-tune", action="store_true", help="Tune sparsity per layer for better cosine at same speedup")
     ap.add_argument("--block-size", default=None, metavar="H,W", help="Block sparse pruning e.g. 4,4 (2D weights only)")
     ap.add_argument("--calibrate", action="store_true", help="Post-prune output calibration to recover cosine")
+    ap.add_argument("--progressive-steps", default=None, metavar="0.5,0.7,0.9", help="Progressive pruning targets (calibrate between)")
+    ap.add_argument("--max-speed-aggressive", action="store_true", help="Small MLP/transformer: struct+lowrank+prune then calibrate (toward 50x)")
+    ap.add_argument("--sparse-pattern", default="unstructured", choices=("unstructured", "2:4"), help="Unstructured or 2:4 sparsity")
     ap.add_argument("--int8-sparse", action="store_true", help="Use INT8 quantized sparse backend (bonus, additional ~1.5-2x)")
     ap.add_argument("--validate", action="store_true", help="Validate accuracy degradation (MSE) between baseline and enhanced model.")
     args = ap.parse_args()
@@ -51,6 +54,9 @@ def main() -> int:
         parts = [int(x.strip()) for x in args.block_size.split(",")]
         if len(parts) == 2:
             block_size = (parts[0], parts[1])
+    progressive_steps = None
+    if args.progressive_steps:
+        progressive_steps = tuple(float(x.strip()) for x in args.progressive_steps.split(","))
 
     if not args.model.exists():
         print(f"Error: not found: {args.model}", file=sys.stderr)
@@ -70,6 +76,9 @@ def main() -> int:
         per_layer_tune=args.per_layer_tune,
         block_size=block_size,
         calibrate_output=args.calibrate,
+        progressive_steps=progressive_steps,
+        max_speed_aggressive=args.max_speed_aggressive,
+        sparse_pattern=args.sparse_pattern,
     )
     if not result.compatible:
         print(f"Error: {result.message}", file=sys.stderr)

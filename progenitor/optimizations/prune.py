@@ -239,6 +239,45 @@ def _prune_array(arr: np.ndarray, sparsity: float) -> np.ndarray:
     return out
 
 
+def _prune_array_to_target(arr: np.ndarray, target_sparsity: float) -> np.ndarray:
+    """Zero more weights until total fraction zeroed is target_sparsity (for progressive pruning)."""
+    if target_sparsity <= 0 or arr.size == 0:
+        return arr
+    if target_sparsity >= 1:
+        return np.zeros_like(arr)
+    out = np.asarray(arr, dtype=np.float64)
+    current_zeros = np.sum(out == 0)
+    current_sparsity = current_zeros / out.size
+    if target_sparsity <= current_sparsity:
+        return out
+    n_more = int((target_sparsity - current_sparsity) * out.size)
+    if n_more <= 0:
+        return out
+    flat = out.ravel()
+    nonzero_idx = np.flatnonzero(flat != 0)
+    if len(nonzero_idx) <= n_more:
+        flat[:] = 0
+        return out.astype(arr.dtype) if out.dtype != arr.dtype else out
+    mags = np.abs(flat[nonzero_idx])
+    k = len(nonzero_idx) - n_more
+    threshold = np.partition(mags, k - 1)[k - 1]
+    flat[nonzero_idx[mags <= threshold]] = 0
+    return out.astype(arr.dtype) if out.dtype != arr.dtype else out
+
+
+def _prune_array_2_4(arr: np.ndarray) -> np.ndarray:
+    """2:4 sparsity: keep 2 largest (by magnitude) per block of 4. Hardware-friendly (e.g. NVIDIA)."""
+    out = np.asarray(arr, dtype=arr.dtype).copy()
+    flat = out.ravel()
+    n = len(flat)
+    for start in range(0, n - 3, 4):
+        block = flat[start : start + 4]
+        idx = np.argsort(np.abs(block))
+        block[idx[0]] = 0
+        block[idx[1]] = 0
+    return out
+
+
 def _prune_array_blocks(
     arr: np.ndarray, sparsity: float, block_h: int = 4, block_w: int = 4
 ) -> np.ndarray:
@@ -285,6 +324,7 @@ def apply_pruning(
     sparsity: float | dict[str, float],
     *,
     block_size: tuple[int, int] | None = None,
+    sparse_pattern: str = "unstructured",
 ) -> None:
     """
     Prune weight initializers in-place: zero out smallest-magnitude weights to achieve
@@ -293,7 +333,11 @@ def apply_pruning(
 
     sparsity: float for uniform, or dict[initializer_name, float] for per-layer sparsity.
     block_size: if (bh, bw), prune in blocks (hardware-friendly); 2D weights only.
+    sparse_pattern: "unstructured" (default) or "2:4" (2 non-zeros per 4; fixed 50% sparsity).
     """
+    if sparse_pattern == "2:4":
+        apply_2_4_pruning(model)
+        return
     if isinstance(sparsity, dict):
         for s in sparsity.values():
             if not 0 <= s <= 1:
@@ -329,6 +373,59 @@ def apply_pruning(
         new_init = numpy_helper.from_array(pruned.astype(arr.dtype), init.name)
         new_initializers.append(new_init)
 
+    del model.graph.initializer[:]
+    model.graph.initializer.extend(new_initializers)
+
+
+def apply_2_4_pruning(model: ModelProto) -> None:
+    """Apply 2:4 sparsity (2 non-zeros per block of 4). ~50% sparsity, hardware-friendly."""
+    to_prune = _weight_initializer_names(model)
+    if not to_prune:
+        return
+    new_initializers = []
+    for init in model.graph.initializer:
+        if init.name not in to_prune:
+            new_initializers.append(init)
+            continue
+        try:
+            arr = numpy_helper.to_array(init)
+        except Exception:
+            new_initializers.append(init)
+            continue
+        if arr.size < 4:
+            new_initializers.append(init)
+            continue
+        if arr.dtype not in (np.float32, np.float64):
+            new_initializers.append(init)
+            continue
+        pruned = _prune_array_2_4(arr)
+        new_initializers.append(numpy_helper.from_array(pruned.astype(arr.dtype), init.name))
+    del model.graph.initializer[:]
+    model.graph.initializer.extend(new_initializers)
+
+
+def apply_pruning_to_target(model: ModelProto, target_sparsity: float) -> None:
+    """Prune more weights until overall sparsity reaches target (for progressive pruning)."""
+    if not 0 <= target_sparsity <= 1:
+        raise ValueError("target_sparsity must be in [0, 1]")
+    to_prune = _weight_initializer_names(model)
+    if not to_prune:
+        return
+    new_initializers = []
+    for init in model.graph.initializer:
+        if init.name not in to_prune:
+            new_initializers.append(init)
+            continue
+        try:
+            arr = numpy_helper.to_array(init)
+        except Exception:
+            new_initializers.append(init)
+            continue
+        if arr.size < 2 or arr.dtype not in (np.float32, np.float64):
+            new_initializers.append(init)
+            continue
+        pruned = _prune_array_to_target(arr, target_sparsity)
+        new_initializers.append(numpy_helper.from_array(pruned.astype(arr.dtype), init.name))
     del model.graph.initializer[:]
     model.graph.initializer.extend(new_initializers)
 

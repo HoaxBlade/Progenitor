@@ -68,9 +68,9 @@ Passes are applied in a fixed order. Architecture is **auto-detected** and only 
 | **Large MLP** (>100k params) | Structured prune 0.75 + low-rank 0.1 + unstructured prune 0.99 (magnitude only). No block size, no per-layer tune. | ~100–125× with sparse backend; cosine not calibrated. |
 | **Small MLP** | Per-layer tune or single sparsity sweep for cosine ≥ 0.9; optional block sparse (4,4). With `--max-speed-aggressive`: struct 0.5 + lowrank 0.2 + prune 0.9 + calibrate. | ~3–7× (dense run) or 5–15× with sparse backend. |
 | **Transformer** | Structured prune 0.25 + low-rank 0.4; optional prune 0.9 if aggressive. Calibration on. | ~2×+ and improved cosine. |
-| **RNN** (LSTM/GRU) | Structured prune 0.2 + low-rank 0.35 + magnitude prune 0.85 on linear and LSTM/GRU weights. Calibration on. | Significant speedup with sparse backend; cosine preserved via calibration. |
-| **GNN** | Structured prune 0.2 + low-rank 0.35 + magnitude prune 0.85 on message/readout MLPs. Calibration on. | Significant speedup with sparse backend; cosine preserved via calibration. |
-| **Diffusion** (conv + attention) | Conv channel prune 0.4 + low-rank 0.35 + magnitude prune 0.85 + calibration; optional static INT8. | Reduced compute; validate on your diffusion task. |
+| **RNN** (LSTM/GRU) | Structured prune 0.2 + low-rank 0.35 + magnitude prune 0.85 on linear and LSTM/GRU weights. Calibration on. | *Tested (small LSTM):* ~2.2× speedup, cosine 0.99. Run with `--validate` on your model. |
+| **GNN** | Structured prune 0.2 + low-rank 0.35 + magnitude prune 0.85 on message/readout MLPs. Calibration on. | *Test model* (examples/export_gnn.py) can trigger ORT shape inference issues. Run with `--validate` on your GNN ONNX. |
+| **Diffusion** (conv + attention) | Conv channel prune 0.4 + low-rank 0.35 + magnitude prune 0.85 + calibration; optional static INT8. | *Tested (minimal conv+attention):* ~1.2× speedup, cosine 0.92. Validate on your diffusion task. |
 
 ### High cosine / advanced (optional flags)
 

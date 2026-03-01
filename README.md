@@ -6,6 +6,7 @@ Inspired by the Progenitor virus: one “strain,” selective compatibility, mea
 
 - **Plan:** [PLAN.md](./PLAN.md)
 - **Phase 1 compatibility (all passes, targets, validation):** [docs/compatibility-phase1.md](./docs/compatibility-phase1.md)
+- **Phase 2 (software):** [docs/compatibility-phase2.md](./docs/compatibility-phase2.md) — in progress
 
 ## Phase 1: ML (ONNX)
 

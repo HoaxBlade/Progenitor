@@ -1,0 +1,83 @@
+# Phase 2: Progenitor compatibility spec (Software)
+
+Progenitor Phase 2 applies the same “enhance to peak” idea to **non-ML software**: services, data pipelines, control logic, APIs. Input = software artifact + target platform → output = optimized build, config, or runtime profile.
+
+**Status:** Phase 2 started; spec and first targets to be defined incrementally.
+
+---
+
+## Goal
+
+- Take **compatible** software (single binary, service, pipeline, or config) and a **target platform** (OS, CPU, I/O, concurrency).
+- Produce an **optimized** version or profile that measurably improves at least one of: latency, throughput, CPU use, I/O, or resource efficiency.
+- No full replacement of the software; **enhance in place** (tuning, flags, config, optional selective changes) so legacy or certified stacks can stay, but run at peak.
+
+---
+
+## Scope (Phase 2)
+
+### In scope (to be refined)
+
+- **Compatible software types** (first slice TBD), e.g.:
+  - Single-process CLI or service (e.g. C/C++, Go, Python).
+  - Data-processing pipelines (batch or streaming; definition TBD).
+  - Real-time or control-style loops (e.g. fixed-work-per-tick).
+- **Target platforms:** Linux first (x86_64/ARM64); then other OS/runtime as needed.
+- **Optimization levers:** Profiling-driven tuning, compiler/build flags, scheduling and concurrency, resource allocation (CPU affinity, memory), config tuning. Optional: small, targeted code or config rewrites with clear rollback.
+- **Metrics:** Latency, throughput, CPU %, memory, I/O — before/after, reproducible.
+
+### Out of scope for Phase 2
+
+- Full rewrites or new implementations of the application.
+- ML model training or inference (that stays in Phase 1).
+- Physical machine or hardware control (Phase 3).
+- Every language, framework, and platform.
+
+---
+
+## Compatibility (to define)
+
+A software artifact is **Progenitor-compatible for Phase 2** if (exact checklist TBD):
+
+1. It is a clearly identified artifact: e.g. executable, service, pipeline definition, or config that we can run and measure.
+2. We can run it on the target platform and collect metrics (latency, throughput, CPU, etc.) without changing its core behavior.
+3. We have a defined, reversible way to apply enhancements (e.g. build flags, config, env, or a small patch set).
+4. Enhancements are documented and reproducible.
+
+**First targets:** To be chosen (e.g. one language/runtime, one “shape” of app: e.g. HTTP service, or batch pipeline, or control loop).
+
+---
+
+## Deliverables (Phase 2)
+
+| # | Deliverable | Description |
+|---|-------------|-------------|
+| 1 | **Compatibility spec** | This document; expand with concrete software types, platforms, and “compatible” checklist. |
+| 2 | **Progenitor software extension** | Entry point or API: software artifact + target platform → optimized artifact or profile (build/config/runtime). |
+| 3 | **Optimization passes** | Concrete, automatic or guided optimizations (e.g. compiler flags, concurrency, config) applied where safe and documented. |
+| 4 | **Benchmarks and metrics** | Before/after metrics; scripts to reproduce. Same principle as Phase 1: no hand-wavy “faster.” |
+| 5 | **Docs and examples** | How to expose a software target to Progenitor; at least one end-to-end example. |
+
+---
+
+## Success criteria (Phase 2)
+
+- For at least one supported software type and target platform, Progenitor produces an optimized version or profile that **measurably** improves at least one of: latency, throughput, CPU use, or memory, without changing correct behavior (or with documented, acceptable trade-offs).
+- Process is **reproducible** and **documented**.
+
+---
+
+## Next steps (immediate)
+
+1. **Pick first software target:** e.g. one of: single-binary CLI/service (C/Go/Python), HTTP API, batch pipeline, or control loop. Document it in this spec.
+2. **Define “artifact” and “run”:** How we point Progenitor at the software (path to binary + config? repo + build recipe? pipeline YAML?) and how we run it to collect baseline metrics.
+3. **Implement minimal pipeline:** Load/identify artifact → apply one or two optimizations (e.g. compiler flags or config) → re-run → measure. Mirror Phase 1’s “minimal Progenitor” idea.
+4. **Add one example and benchmark:** One end-to-end software example and a benchmark script that reports before/after.
+
+---
+
+## Version
+
+- **Spec version:** 0.1  
+- **Phase:** 2 (Software)  
+- **Last updated:** 2026-03  

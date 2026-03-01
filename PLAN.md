@@ -95,11 +95,18 @@
 - Progenitor analyzes and applies optimizations: profiling-driven tuning, compiler flags, scheduling, resource allocation, maybe selective rewriting or config tuning.
 - Defence angle: legacy or certified software that cannot be fully replaced but can be “enhanced.”
 
-### Deliverables (Phase 2) — to detail later
+### Deliverables (Phase 2)
 
-- Compatibility spec for software targets.
-- Progenitor extension: input = software artifact + target platform → output = optimized build/config or runtime profile.
-- Benchmarks and before/after metrics.
+- **Compatibility spec** for software targets → [docs/compatibility-phase2.md](docs/compatibility-phase2.md).
+- **Progenitor extension:** input = software artifact + target platform → output = optimized build/config or runtime profile.
+- **Benchmarks and before/after metrics** (latency, throughput, CPU, memory — reproducible).
+
+### Phase 2 next steps (immediate)
+
+1. **Pick first software target:** One concrete type (e.g. single-binary CLI/service in C/Go/Python, or HTTP API, or batch pipeline). Document in compatibility-phase2.md.
+2. **Define artifact and run:** How we point at the software (binary + config, repo + build, pipeline YAML) and how we run it to collect baseline metrics.
+3. **Minimal pipeline:** Identify artifact → apply one or two optimizations (e.g. compiler flags, config) → re-run → measure. One entry point or API for “enhance software.”
+4. **One example + benchmark:** One end-to-end software example and a benchmark script that reports before/after.
 
 ---
 

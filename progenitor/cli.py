@@ -1,4 +1,4 @@
-"""CLI: progenitor enhance model.onnx --target cpu."""
+"""CLI: progenitor enhance model.onnx --target cpu; progenitor enhance-software ./app --tune-workers."""
 
 import argparse
 import sys
@@ -10,12 +10,12 @@ from progenitor.api import enhance
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="progenitor",
-        description="Progenitor: enhance compatible ML models to peak performance (Phase 1: ONNX).",
+        description="Progenitor: enhance ML models (Phase 1) and software (Phase 2) to peak performance.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    # enhance
-    p = subparsers.add_parser("enhance", help="Enhance an ONNX model for the given target.")
+    # enhance (Phase 1: ML)
+    p = subparsers.add_parser("enhance", help="Enhance an ONNX model for the given target (Phase 1).")
     p.add_argument("model", type=Path, help="Path to .onnx model")
     p.add_argument("--target", "-t", default="cpu", choices=("cpu", "cuda"), help="Hardware target (default: cpu)")
     p.add_argument("--output", "-o", type=Path, default=None, help="Output path for enhanced model (default: <model>_enhanced.onnx)")
@@ -25,6 +25,14 @@ def main() -> None:
     p.add_argument("--lowrank", type=float, default=None, metavar="RANK_RATIO", help="Low-rank SVD decomposition: keep RANK_RATIO of singular values (e.g. 0.25, ~2-3×)")
     p.add_argument("--max-speed", action="store_true", help="Chain all optimizations for maximum speedup (~30-50×)")
     p.set_defaults(func=_cmd_enhance)
+
+    # enhance-software (Phase 2)
+    p2 = subparsers.add_parser("enhance-software", help="Enhance a software artifact (Phase 2). Opt-in levers only.")
+    p2.add_argument("artifact", type=Path, help="Path to artifact directory containing progenitor.yaml")
+    p2.add_argument("--tune-workers", action="store_true", help="Enable workers lever (safe cap by CPU count)")
+    p2.add_argument("--workers", type=int, default=None, metavar="N", help="Set workers to N (used with --tune-workers; otherwise auto from CPU)")
+    p2.add_argument("--output-env", type=Path, default=None, help="Write env to this path (default: <artifact>/.env.progenitor)")
+    p2.set_defaults(func=_cmd_enhance_software)
 
     args = parser.parse_args()
     args.func(args)
@@ -60,3 +68,26 @@ def _cmd_enhance(args: argparse.Namespace) -> None:
         sys.exit(1)
     print(f"Enhanced: {result.output_path}")
     print(result.message)
+
+
+def _cmd_enhance_software(args: argparse.Namespace) -> None:
+    from progenitor.software.enhance import enhance_software
+    try:
+        out = enhance_software(
+            args.artifact,
+            tune_workers=args.tune_workers,
+            workers=args.workers,
+            output_env_path=args.output_env,
+        )
+        if args.tune_workers:
+            print(f"Enhanced: {out}")
+            print("Applied: --tune-workers (WORKERS in env). Source this file before running your app.")
+        else:
+            print(f"Written: {out}")
+            print("No levers enabled. Use --tune-workers to apply workers tuning.")
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)

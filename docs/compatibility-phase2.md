@@ -28,7 +28,7 @@ Progenitor Phase 2 applies the same “enhance to peak” idea to **non-ML softw
 
 ### User control (no auto-blast)
 
-- **You decide what gets improved.** Progenitor must not automatically “improve everything” at once. Pushing many levers at the same time (e.g. more workers + bigger buffers + higher limits + aggressive timeouts) can overload the system and crash the site or service.
+- **You decide what gets improved.** Progenitor must not automatically “improve everything” at once. Pushing many levers at the same time (e.g. more workers + bigger buffers + higher limits + aggressive timeouts) can overload the system and crash the site or service. When testing on your own websites, changes are opt-in and controllable so you don't make them unusable.
 - **Explicit opt-in per dimension or per lever.** You choose which improvements to apply: e.g. “only tune workers,” or “only latency,” or “workers + connection pool, nothing else.” Default is conservative: no change unless you enable a specific optimization or pass.
 - **No surprise changes.** Every applied change is explicit and documented (what was tuned, before/after value). Rollback is possible (revert config, env, or build).
 - **Safe-by-default.** If a lever has a known risk (e.g. raising workers can OOM), we document it and optionally cap or warn; we do not auto-apply aggressive values.
@@ -71,6 +71,15 @@ A software artifact is **Progenitor-compatible for Phase 2** if (exact checklist
 
 - For at least one supported software type and target platform, Progenitor produces an optimized version or profile that **measurably** improves at least one of: latency, throughput, CPU use, or memory, without changing correct behavior (or with documented, acceptable trade-offs).
 - Process is **reproducible** and **documented**.
+
+---
+
+## Initial implementation
+
+- **First target:** `python_http` — directory with `progenitor.yaml` + app (e.g. Flask/Gunicorn). Manifest defines `run_cmd` and `tune` levers (min/max/default).
+- **First lever:** `workers` — opt-in via `--tune-workers`. Safe cap by CPU count and manifest max. Explicit value: `--workers N`.
+- **CLI:** `progenitor enhance-software <artifact_dir> [--tune-workers] [--workers N]` writes `.env.progenitor`. No levers applied unless you pass `--tune-workers`.
+- **Benchmark:** `python benchmarks/run_software.py --url <base_url> --repeat 50` — you start the server before/after; script measures latency and throughput.
 
 ---
 

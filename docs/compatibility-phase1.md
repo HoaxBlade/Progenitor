@@ -30,7 +30,14 @@ Progenitor enhances only **compatible** model + target pairs. This document defi
 
 ## Optimization passes (Phase 1)
 
-Passes are applied in a fixed order. Architecture is auto-detected (CNN vs MLP vs transformer) and only beneficial passes run per model type.
+Passes are applied in a fixed order. Architecture is **auto-detected** and only beneficial passes run per model type:
+
+- **CNN:** Conv-heavy (more Conv than MatMul/Gemm, ≥3 convs). ResNet-style.
+- **Diffusion:** Conv-heavy + attention (Softmax/LayerNorm) + ≥4 linear ops; e.g. U-Net + cross-attn.
+- **Transformer:** Not conv-heavy, has Softmax/LayerNorm, ≥6 linear ops.
+- **RNN:** At least one LSTM or GRU op.
+- **GNN:** At least two Gather/Scatter ops and ≥4 linear ops (message-passing style).
+- **MLP:** None of the above; large MLP if param count >100k.
 
 ### Always-on
 
@@ -48,7 +55,7 @@ Passes are applied in a fixed order. Architecture is auto-detected (CNN vs MLP v
 | **Block removal** | CNN `--max-speed` only (validation-guided) | Remove least-important residual blocks (identity branches); replaces block with skip. | CNN (ResNet-style) |
 | **Structured pruning** | `--struct-prune RATIO` or MLP/transformer `--max-speed` | Remove entire neurons / filters; shrinks MatMul/Gemm/Conv dimensions. | MLP, transformer, CNN (struct path) |
 | **Low-rank (SVD)** | `--lowrank RATIO` or MLP/transformer `--max-speed` | Replace weight matrices with low-rank factor; keeps top singular values. | MLP, transformer, CNN |
-| **Unstructured (magnitude) pruning** | `--prune SPARSITY` or MLP `--max-speed` | Zero out fraction of weights by magnitude; same graph, sparse weights. Use sparse backend for 5–15×. | MLP, transformer (optional), CNN (with conv) |
+| **Unstructured (magnitude) pruning** | `--prune SPARSITY` or MLP/RNN/GNN `--max-speed` | Zero out fraction of weights by magnitude; same graph, sparse weights. Supports Conv, MatMul, Gemm, **LSTM, GRU**. Use sparse backend for 5–15×. | MLP, transformer, RNN, GNN, CNN (with conv) |
 | **Output calibration** | `--calibrate` or default for CNN/transformer `--max-speed` | Fit per-output scale/bias so pruned/optimized output matches original; preserves cosine. | Any (except large MLP 123× path) |
 | **Dynamic INT8 quantization** | `--quantize` | Weights and activations quantized to INT8 at runtime; 2–4× on CPU typical. | Any |
 | **Static INT8 quantization** | `--static-quantize` or CNN `--max-speed` | Calibrated INT8; often faster than dynamic on CPU. Chained after conv prune for CNN. | Any |
@@ -61,6 +68,9 @@ Passes are applied in a fixed order. Architecture is auto-detected (CNN vs MLP v
 | **Large MLP** (>100k params) | Structured prune 0.75 + low-rank 0.1 + unstructured prune 0.99 (magnitude only). No block size, no per-layer tune. | ~100–125× with sparse backend; cosine not calibrated. |
 | **Small MLP** | Per-layer tune or single sparsity sweep for cosine ≥ 0.9; optional block sparse (4,4). With `--max-speed-aggressive`: struct 0.5 + lowrank 0.2 + prune 0.9 + calibrate. | ~3–7× (dense run) or 5–15× with sparse backend. |
 | **Transformer** | Structured prune 0.25 + low-rank 0.4; optional prune 0.9 if aggressive. Calibration on. | ~2×+ and improved cosine. |
+| **RNN** (LSTM/GRU) | Structured prune 0.2 + low-rank 0.35 + magnitude prune 0.85 on linear and LSTM/GRU weights. Calibration on. | Significant speedup with sparse backend; cosine preserved via calibration. |
+| **GNN** | Structured prune 0.2 + low-rank 0.35 + magnitude prune 0.85 on message/readout MLPs. Calibration on. | Significant speedup with sparse backend; cosine preserved via calibration. |
+| **Diffusion** (conv + attention) | Conv channel prune 0.4 + low-rank 0.35 + magnitude prune 0.85 + calibration; optional static INT8. | Reduced compute; validate on your diffusion task. |
 
 ### High cosine / advanced (optional flags)
 

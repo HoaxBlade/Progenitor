@@ -11,6 +11,8 @@ _WEIGHT_INPUT_INDICES: dict[str, list[int]] = {
     "Conv": [1],           # W
     "MatMul": [0, 1],      # A, B
     "Gemm": [0, 1],        # A, B
+    "LSTM": [1, 2],        # W, R (3D tensors: magnitude prune only)
+    "GRU": [1, 2],        # W, R
 }
 
 
@@ -208,7 +210,7 @@ def apply_importance_pruning(
 
 
 def _weight_initializer_names(model: ModelProto) -> set[str]:
-    """Names of initializers used as weights by Conv/MatMul/Gemm."""
+    """Names of initializers used as weights by Conv/MatMul/Gemm/LSTM/GRU."""
     names: set[str] = set()
     initializer_names = {init.name for init in model.graph.initializer}
     for node in model.graph.node:

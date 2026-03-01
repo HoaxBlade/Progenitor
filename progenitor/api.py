@@ -122,7 +122,7 @@ def enhance(
     model = apply_shape_inference(model)
     model = apply_onnx_simplifier(model)
 
-    # Detect architecture: CNN vs Transformer vs MLP
+    # Detect architecture: CNN, Diffusion, Transformer, RNN, GNN, MLP
     from collections import Counter
     op_counts = Counter(n.op_type for n in model.graph.node)
     n_conv = op_counts.get("Conv", 0)
@@ -130,15 +130,27 @@ def enhance(
     has_softmax = op_counts.get("Softmax", 0) > 0
     has_layernorm = op_counts.get("LayerNormalization", 0) > 0
     is_conv_heavy = n_conv > n_linear and n_conv >= 3
-    is_transformer = not is_conv_heavy and (has_softmax or has_layernorm) and n_linear >= 6
+    has_attention = has_softmax or has_layernorm
+    # Diffusion: conv-heavy + attention (e.g. U-Net + cross-attn)
+    is_diffusion = is_conv_heavy and has_attention and n_linear >= 4
+    is_conv_only_cnn = is_conv_heavy and not is_diffusion
+    is_transformer = not is_conv_heavy and has_attention and n_linear >= 6
+    is_rnn = (op_counts.get("LSTM", 0) + op_counts.get("GRU", 0)) >= 1
+    is_gnn = (op_counts.get("Gather", 0) + op_counts.get("Scatter", 0)) >= 2 and n_linear >= 4
     is_large_mlp = False
-    if max_speed and not is_conv_heavy and not is_transformer:
+    if max_speed and not is_conv_heavy and not is_transformer and not is_rnn and not is_gnn:
         from onnx import numpy_helper
         total_params = sum(numpy_helper.to_array(i).size for i in model.graph.initializer)
         is_large_mlp = total_params > 100_000
 
     if max_speed:
-        if is_conv_heavy:
+        if is_diffusion:
+            # Diffusion (conv + attention): single conv prune + lowrank + prune + calibrate (no second struct conv pass)
+            struct_prune = None  # avoid double conv prune; conv_prune 0.4 below is the only conv pass
+            lowrank = lowrank if lowrank is not None else 0.35
+            prune = prune if prune is not None else 0.85
+            conv_prune = conv_prune if conv_prune is not None else 0.4
+        elif is_conv_only_cnn:
             # CNN: one conv pass only (0.5); no second struct pass so cosine stays high
             struct_prune = struct_prune if struct_prune is not None else None
             prune = None
@@ -147,6 +159,16 @@ def enhance(
             struct_prune = struct_prune if struct_prune is not None else 0.25
             lowrank = lowrank if lowrank is not None else 0.4
             prune = prune if prune is not None else (0.9 if opts.max_speed_aggressive else None)
+        elif is_rnn:
+            # RNN (LSTM/GRU): struct + lowrank on linear parts; magnitude prune on LSTM/GRU weights + calibrate
+            struct_prune = struct_prune if struct_prune is not None else 0.2
+            lowrank = lowrank if lowrank is not None else 0.35
+            prune = prune if prune is not None else 0.85
+        elif is_gnn:
+            # GNN: struct + lowrank + prune on message/readout MLPs; calibrate
+            struct_prune = struct_prune if struct_prune is not None else 0.2
+            lowrank = lowrank if lowrank is not None else 0.35
+            prune = prune if prune is not None else 0.85
         else:
             # MLP: large MLP -> full stack (struct 0.75 + lowrank 0.1 + 0.99) for 123x; small -> tuner or aggressive
             if is_large_mlp:
@@ -163,12 +185,12 @@ def enhance(
                     struct_prune = None
                     lowrank = None
                     prune = prune if prune is not None else 0.99
-        # Apply high-cosine workarounds by default when max_speed: per-layer + block for small MLP; calibration for CNN/transformer only (keeps small MLP sparse path)
-        _is_small_mlp = not is_conv_heavy and not is_transformer and not is_large_mlp
+        # Apply high-cosine workarounds by default when max_speed: per-layer + block for small MLP; calibration for CNN/transformer/RNN/GNN/diffusion (keeps small MLP sparse path)
+        _is_small_mlp = not is_conv_heavy and not is_transformer and not is_large_mlp and not is_rnn and not is_gnn and not is_diffusion
         _per_layer = (opts.per_layer_tune or True) if _is_small_mlp else opts.per_layer_tune
         _block_size = opts.block_size if opts.block_size is not None else ((4, 4) if _is_small_mlp else None)
-        _calibrate = opts.calibrate_output or ((is_conv_heavy or is_transformer) and not is_large_mlp)
-        # Update the opts object (preserve conv_prune and high-cosine options)
+        _calibrate = opts.calibrate_output or ((is_conv_heavy or is_transformer or is_rnn or is_gnn or is_diffusion) and not is_large_mlp)
+        # Update the opts object (use updated conv_prune for diffusion)
         opts = EnhanceOptions(
             target=t,
             output_path=opts.output_path,
@@ -176,7 +198,7 @@ def enhance(
             static_quantize=static_quantize,
             prune=prune,
             struct_prune=struct_prune,
-            conv_prune=opts.conv_prune,
+            conv_prune=conv_prune,
             lowrank=lowrank,
             max_speed=max_speed,
             per_layer_tune=_per_layer,
@@ -211,7 +233,7 @@ def enhance(
     if opts.conv_prune is not None:
         try:
             from progenitor.optimizations.conv_prune import apply_conv_structured_pruning
-            if is_conv_heavy and max_speed:
+            if is_conv_only_cnn and max_speed:
                 best_conv_ratio = None
                 for ratio in [0.5, 0.55, 0.6, 0.65, 0.7]:
                     m = copy.deepcopy(model)
@@ -237,7 +259,7 @@ def enhance(
             applied_passes.append(f"conv channel prune FAILED ({e})")
 
     # 0b. Validation-guided block removal (CNN max_speed only). Uses _cnn_cosine_threshold; calibration restores final cosine.
-    if _enable_block_removal and is_conv_heavy and max_speed and applied_passes:
+    if _enable_block_removal and is_conv_only_cnn and max_speed and applied_passes:
         try:
             from progenitor.optimizations.block_removal import apply_block_removal
             best_block_ratio = 0.0
@@ -259,8 +281,8 @@ def enhance(
         except Exception as e:
             applied_passes.append(f"block removal FAILED ({e})")
 
-    # 1. Structured pruning (physical graph shrinkage); also large MLP and aggressive small MLP/transformer
-    if opts.struct_prune is not None and (is_conv_heavy or is_transformer or is_large_mlp or (not is_conv_heavy and not is_transformer and not is_large_mlp)):
+    # 1. Structured pruning (physical graph shrinkage); CNN, transformer, MLP, RNN, GNN
+    if opts.struct_prune is not None and (is_conv_heavy or is_transformer or is_large_mlp or is_rnn or is_gnn or (not is_conv_heavy and not is_transformer and not is_large_mlp)):
         try:
             if is_conv_heavy:
                 from progenitor.optimizations.conv_prune import apply_conv_structured_pruning
@@ -270,20 +292,20 @@ def enhance(
                 from progenitor.optimizations.transformer_prune import apply_transformer_structured_pruning
                 apply_transformer_structured_pruning(model, opts.struct_prune)
                 applied_passes.append(f"transformer FFN prune {opts.struct_prune:.0%}")
-            elif is_large_mlp:
+            elif is_large_mlp or is_rnn or is_gnn:
                 from progenitor.optimizations.structured_prune import apply_structured_pruning
                 apply_structured_pruning(model, opts.struct_prune)
                 applied_passes.append(f"structured prune {opts.struct_prune:.0%}")
             else:
-                # Aggressive small MLP
+                # Small MLP
                 from progenitor.optimizations.structured_prune import apply_structured_pruning
                 apply_structured_pruning(model, opts.struct_prune)
                 applied_passes.append(f"structured prune {opts.struct_prune:.0%}")
         except Exception as e:
             applied_passes.append(f"structured prune FAILED ({e})")
 
-    # 2. Low-rank SVD decomposition; also large MLP and aggressive small MLP/transformer
-    if opts.lowrank is not None and (is_conv_heavy or is_transformer or is_large_mlp or (not is_conv_heavy and not is_transformer and not is_large_mlp)):
+    # 2. Low-rank SVD decomposition; CNN, transformer, MLP, RNN, GNN
+    if opts.lowrank is not None and (is_conv_heavy or is_transformer or is_large_mlp or is_rnn or is_gnn or (not is_conv_heavy and not is_transformer and not is_large_mlp)):
         try:
             from progenitor.optimizations.lowrank import apply_lowrank_decomposition
             apply_lowrank_decomposition(model, opts.lowrank)
@@ -313,10 +335,14 @@ def enhance(
                 prune_kw = {} if opts.block_size is None else {"block_size": opts.block_size}
                 prune_kw["sparse_pattern"] = getattr(opts, "sparse_pattern", "unstructured")
                 if not is_conv_heavy:
-                    # MLP: large MLP -> full stack already applied, magnitude 0.99 for 123x; small -> tune for cosine
+                    # MLP / RNN / GNN
                     if is_large_mlp:
                         # Large MLP: magnitude 0.99 only (no block_size) for 123x with sparse backend
                         apply_pruning(model, opts.prune)
+                        applied_passes.append(f"unstructured prune {opts.prune:.0%}")
+                    elif is_rnn or is_gnn:
+                        # RNN/GNN: magnitude prune (Conv/MatMul/Gemm/LSTM/GRU weights); no per-layer tune
+                        apply_pruning(model, opts.prune, **prune_kw)
                         applied_passes.append(f"unstructured prune {opts.prune:.0%}")
                     else:
                         importance = compute_activation_importance(model, num_runs=25)

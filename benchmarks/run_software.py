@@ -55,12 +55,24 @@ def main() -> int:
     p99 = times_sorted[int(n * 0.99)] if n >= 2 else times_sorted[-1] if n else 0
     throughput = 1000.0 / avg_ms if avg_ms > 0 else 0
 
-    print("Phase 2 software benchmark")
-    print("=" * 40)
-    print(f"URL:      {url}")
-    print(f"Requests: {n} (warmup {args.warmup})")
-    print(f"Latency:  avg {avg_ms:.2f} ms  p50 {p50:.2f} ms  p99 {p99:.2f} ms")
-    print(f"Throughput: {throughput:.1f} /s")
+    # Formatted, readable output
+    print()
+    print("  Phase 2 — URL benchmark")
+    print("  " + "─" * 44)
+    print(f"  Target URL:  {url}")
+    print(f"  Measured:    {n} requests (after {args.warmup} warmup)")
+    print()
+    print("  Latency (time for one request):")
+    print(f"    Average:   {avg_ms:>8.2f} ms   (typical request)")
+    print(f"    Median:    {p50:>8.2f} ms   (half faster, half slower)")
+    print(f"    p99:       {p99:>8.2f} ms   (slowest 1% of requests)")
+    print()
+    print("  Throughput:")
+    print(f"    {throughput:>8.1f} requests per second")
+    print()
+    print("  Summary:  One request takes about {:.0f} ms on average; the server can handle about {:.1f} requests per second."
+          .format(avg_ms, throughput))
+    print()
     return 0
 
 

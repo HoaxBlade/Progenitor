@@ -26,6 +26,13 @@ Progenitor Phase 2 applies the same “enhance to peak” idea to **non-ML softw
 - **Optimization levers:** Profiling-driven tuning, compiler/build flags, scheduling and concurrency, resource allocation (CPU affinity, memory), config tuning. Optional: small, targeted code or config rewrites with clear rollback.
 - **Metrics:** Latency, throughput, CPU %, memory, I/O — before/after, reproducible.
 
+### User control (no auto-blast)
+
+- **You decide what gets improved.** Progenitor must not automatically “improve everything” at once. Pushing many levers at the same time (e.g. more workers + bigger buffers + higher limits + aggressive timeouts) can overload the system and crash the site or service.
+- **Explicit opt-in per dimension or per lever.** You choose which improvements to apply: e.g. “only tune workers,” or “only latency,” or “workers + connection pool, nothing else.” Default is conservative: no change unless you enable a specific optimization or pass.
+- **No surprise changes.** Every applied change is explicit and documented (what was tuned, before/after value). Rollback is possible (revert config, env, or build).
+- **Safe-by-default.** If a lever has a known risk (e.g. raising workers can OOM), we document it and optionally cap or warn; we do not auto-apply aggressive values.
+
 ### Out of scope for Phase 2
 
 - Full rewrites or new implementations of the application.

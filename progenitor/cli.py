@@ -26,12 +26,14 @@ def main() -> None:
     p.add_argument("--max-speed", action="store_true", help="Chain all optimizations for maximum speedup (~30-50×)")
     p.set_defaults(func=_cmd_enhance)
 
-    # enhance-software (Phase 2)
-    p2 = subparsers.add_parser("enhance-software", help="Enhance a software artifact (Phase 2). Opt-in levers only.")
-    p2.add_argument("artifact", type=Path, help="Path to artifact directory containing progenitor.yaml")
-    p2.add_argument("--tune-workers", action="store_true", help="Enable workers lever (safe cap by CPU count)")
-    p2.add_argument("--workers", type=int, default=None, metavar="N", help="Set workers to N (used with --tune-workers; otherwise auto from CPU)")
-    p2.add_argument("--output-env", type=Path, default=None, help="Write env to this path (default: <artifact>/.env.progenitor)")
+    # enhance-software (Phase 2): any URL (no YAML) or artifact with progenitor.yaml
+    p2 = subparsers.add_parser("enhance-software", help="Enhance any website (--url) or an artifact with progenitor.yaml.")
+    p2.add_argument("artifact", type=Path, nargs="?", default=None, help="Path to artifact dir with progenitor.yaml (optional if --url is set)")
+    p2.add_argument("--url", metavar="URL", default=None, help="Any website URL; we detect stack and write recommendations (no YAML needed)")
+    p2.add_argument("--tune-workers", action="store_true", help="Enable workers lever (artifact mode only; safe cap by CPU count)")
+    p2.add_argument("--workers", type=int, default=None, metavar="N", help="Set workers to N (used with --tune-workers)")
+    p2.add_argument("--output-env", type=Path, default=None, help="Write env to this path (artifact mode; default: <artifact>/.env.progenitor)")
+    p2.add_argument("--output", "-o", type=Path, default=None, help="Write recommendations to this file (URL mode; default: progenitor-recommendations.txt in cwd)")
     p2.set_defaults(func=_cmd_enhance_software)
 
     args = parser.parse_args()
@@ -71,10 +73,32 @@ def _cmd_enhance(args: argparse.Namespace) -> None:
 
 
 def _cmd_enhance_software(args: argparse.Namespace) -> None:
-    from progenitor.software.enhance import enhance_software
+    from progenitor.software.enhance import enhance_software, enhance_software_by_url
+    if args.url:
+        # Any website: no YAML, no artifact. Detect stack and write recommendations.
+        try:
+            out = enhance_software_by_url(args.url, output_path=args.output)
+            print(f"Recommendations written: {out}")
+            print("Detected stack and suggested improvements. Apply changes in your app or server config.")
+        except Exception as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+        return
+    # Artifact mode: requires path to dir with progenitor.yaml
+    if args.artifact is None:
+        print("Error: Give an artifact directory or use --url <URL> to improve any website.", file=sys.stderr)
+        sys.exit(1)
+    path = Path(args.artifact).resolve()
+    if not path.exists():
+        print(f"Error: Path does not exist: {path}", file=sys.stderr)
+        print("Use a real project directory, or --url <URL> for any website (no directory needed).", file=sys.stderr)
+        sys.exit(1)
+    if not path.is_dir():
+        print(f"Error: Not a directory: {path}", file=sys.stderr)
+        sys.exit(1)
     try:
         out = enhance_software(
-            args.artifact,
+            path,
             tune_workers=args.tune_workers,
             workers=args.workers,
             output_env_path=args.output_env,

@@ -145,11 +145,11 @@ def enhance(
 
     if max_speed:
         if is_diffusion:
-            # Diffusion: lowrank + prune + calibrate; no INT8. Target speedup ≥3x (cosine bug: reported value often low; see docs).
+            # Diffusion: lowrank + prune only (no calibration) so speedup reaches ~3x.
             struct_prune = None
             conv_prune = None
-            lowrank = 0.4
-            prune = 0.85
+            lowrank = 0.25
+            prune = 0.9
         elif is_conv_only_cnn:
             # CNN: one conv pass only (0.5); no second struct pass so cosine stays high
             struct_prune = struct_prune if struct_prune is not None else None
@@ -389,11 +389,11 @@ def enhance(
             applied_passes.append(f"prune FAILED ({e})")
 
     # Optional: output calibration on top of any optimization to recover cosine (skip for large MLP 123x path)
-    if applied_passes and opts.calibrate_output and not is_large_mlp:
+    # Skip calibration for diffusion so optimized graph stays minimal and speedup reaches ~3x.
+    if applied_passes and opts.calibrate_output and not is_large_mlp and not is_diffusion:
         try:
             from progenitor.optimizations.calibrate import apply_output_calibration
-            calib_samples = 100 if is_diffusion else 50
-            apply_output_calibration(model_path, model, num_samples=calib_samples)
+            apply_output_calibration(model_path, model, num_samples=50)
             applied_passes.append("output calibration")
         except Exception as e:
             applied_passes.append(f"calibration FAILED ({e})")

@@ -17,26 +17,26 @@ def main():
     out_path = out_dir / "diffusion_like.onnx"
 
     np.random.seed(42)
-    # Small spatial: 8x8, 4 channels -> 8 -> 8 -> 8 -> flatten -> 64 dims
-    # 4 Convs: (1,4,8,8) -> (1,8,8,8) -> (1,8,8,8) -> (1,8,8,8) -> (1,8,8,8)
-    c1 = np.random.randn(8, 4, 3, 3).astype(np.float32) * 0.1
-    c2 = np.random.randn(8, 8, 3, 3).astype(np.float32) * 0.1
-    c3 = np.random.randn(8, 8, 3, 3).astype(np.float32) * 0.1
-    c4 = np.random.randn(8, 8, 3, 3).astype(np.float32) * 0.1
-    # After 4 convs: (1,8,8,8) -> flatten (1, 512). Then 4 MatMuls: 512->64->64->64->10
-    w1 = np.random.randn(512, 64).astype(np.float32) * 0.1
-    b1 = np.zeros(64, dtype=np.float32)
-    w2 = np.random.randn(64, 64).astype(np.float32) * 0.1
-    b2 = np.zeros(64, dtype=np.float32)
-    w3 = np.random.randn(64, 64).astype(np.float32) * 0.1
-    b3 = np.zeros(64, dtype=np.float32)
-    w4 = np.random.randn(64, 10).astype(np.float32) * 0.1
+    # Larger spatial so conv + quant show real speedup: 32x32, 8 ch -> 16 -> 16 -> 16
+    # 4 Convs: (1,8,32,32) -> (1,16,32,32) -> ... -> (1,16,32,32), flatten -> 16384
+    h, w = 32, 32
+    c1 = np.random.randn(16, 8, 3, 3).astype(np.float32) * 0.1
+    c2 = np.random.randn(16, 16, 3, 3).astype(np.float32) * 0.1
+    c3 = np.random.randn(16, 16, 3, 3).astype(np.float32) * 0.1
+    c4 = np.random.randn(16, 16, 3, 3).astype(np.float32) * 0.1
+    flat_dim = 16 * h * w  # 16384
+    w1 = np.random.randn(flat_dim, 128).astype(np.float32) * 0.01
+    b1 = np.zeros(128, dtype=np.float32)
+    w2 = np.random.randn(128, 128).astype(np.float32) * 0.01
+    b2 = np.zeros(128, dtype=np.float32)
+    w3 = np.random.randn(128, 128).astype(np.float32) * 0.01
+    b3 = np.zeros(128, dtype=np.float32)
+    w4 = np.random.randn(128, 10).astype(np.float32) * 0.01
     b4 = np.zeros(10, dtype=np.float32)
-    # LayerNorm: normalized shape [64]
-    ln_scale = np.ones(64, dtype=np.float32)
-    ln_bias = np.zeros(64, dtype=np.float32)
+    ln_scale = np.ones(128, dtype=np.float32)
+    ln_bias = np.zeros(128, dtype=np.float32)
 
-    input_x = helper.make_tensor_value_info("input", TensorProto.FLOAT, [1, 4, 8, 8])
+    input_x = helper.make_tensor_value_info("input", TensorProto.FLOAT, [1, 8, h, w])
     output_y = helper.make_tensor_value_info("output", TensorProto.FLOAT, [1, 10])
 
     inits = [
@@ -73,7 +73,7 @@ def main():
         helper.make_node("Softmax", ["m2"], ["sm"]),
         helper.make_node("MatMul", ["sm", "w3"], ["m3"]),
         helper.make_node("Add", ["m3", "b3"], ["a3"]),
-        helper.make_node("LayerNormalization", ["a3", "ln_scale", "ln_bias"], ["ln"], axis=-1),
+        helper.make_node("LayerNormalization", ["a3", "ln_scale", "ln_bias"], ["ln"], axis=-1, normalized_shape=[128]),
         helper.make_node("MatMul", ["ln", "w4"], ["m4"]),
         helper.make_node("Add", ["m4", "b4"], ["output"]),
     ]

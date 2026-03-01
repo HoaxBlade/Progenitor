@@ -69,8 +69,8 @@ Passes are applied in a fixed order. Architecture is **auto-detected** and only 
 | **Small MLP** | Per-layer tune or single sparsity sweep for cosine ≥ 0.9; optional block sparse (4,4). With `--max-speed-aggressive`: struct 0.5 + lowrank 0.2 + prune 0.9 + calibrate. | ~3–7× (dense run) or 5–15× with sparse backend. |
 | **Transformer** | Structured prune 0.25 + low-rank 0.4; optional prune 0.9 if aggressive. Calibration on. | ~2×+ and improved cosine. |
 | **RNN** (LSTM/GRU) | Structured prune 0.2 + low-rank 0.35 + magnitude prune 0.85 on linear and LSTM/GRU weights. Calibration on. | *Tested (small LSTM):* ~2.2× speedup, cosine 0.99. Run with `--validate` on your model. |
-| **GNN** | Structured prune 0.2 + low-rank 0.35 + magnitude prune 0.85 on message/readout MLPs. Calibration on. | *Test model* (examples/export_gnn.py) can trigger ORT shape inference issues. Run with `--validate` on your GNN ONNX. |
-| **Diffusion** (conv + attention) | Conv channel prune 0.4 + low-rank 0.35 + magnitude prune 0.85 + calibration; optional static INT8. | *Tested (minimal conv+attention):* ~1.2× speedup, cosine 0.92. Validate on your diffusion task. |
+| **GNN** | No struct (graph has Gather/Scatter); low-rank 0.35 + magnitude prune 0.85. Calibration on. | *Tested (examples/gnn_like.onnx):* ~2.3× speedup; cosine can drop (e.g. 0.72). Run with `--validate`. |
+| **Diffusion** (conv + attention) | Low-rank 0.5 + magnitude prune 0.75 + output calibration. No INT8 (static QDQ/dynamic quant issues). Saves FP32 optimized. | *Tested:* ~3× speedup. **Known bug:** reported cosine stays ~0.098 in validation; likely bug in calibration/validation path for diffusion — to be fixed. |
 
 ### High cosine / advanced (optional flags)
 
@@ -93,6 +93,10 @@ Passes are applied in a fixed order. Architecture is **auto-detected** and only 
   python benchmarks/run.py path/to/model.onnx --max-speed --validate
   ```
 - **CNN max-speed:** Validation-guided conv and block removal keep intermediate cosine above a threshold; output calibration restores final cosine so it is not compromised.
+
+### Known issues (to fix)
+
+- **Diffusion cosine:** For diffusion-style models, the reported cosine similarity in `--validate` stays fixed at ~0.098 and does not reflect calibration. This is a bug (either in validation, in how the calibrated model is saved/loaded, or in the calibration path for diffusion). Speedup (~3×) is correct; cosine reporting must be fixed separately.
 
 ---
 

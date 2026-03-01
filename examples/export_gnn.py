@@ -17,23 +17,19 @@ def main():
     out_path = out_dir / "gnn_like.onnx"
 
     np.random.seed(42)
-    # Feature dim 16, hidden 32, out 10. Two "Gather" style ops + 4 linear layers.
-    W1 = np.random.randn(16, 32).astype(np.float32) * 0.1
+    # Gather1: input (1,16) -> indices (8,) axis=1 -> (1,8). So W1 must be (8, 32).
+    # Gather2: r3 (1,32) -> indices (10,) axis=1 -> (1,10). So W4 must be (10, 10).
+    W1 = np.random.randn(8, 32).astype(np.float32) * 0.1   # (1,8) @ (8,32) -> (1,32)
     b1 = np.zeros(32, dtype=np.float32)
     W2 = np.random.randn(32, 32).astype(np.float32) * 0.1
     b2 = np.zeros(32, dtype=np.float32)
     W3 = np.random.randn(32, 32).astype(np.float32) * 0.1
     b3 = np.zeros(32, dtype=np.float32)
-    W4 = np.random.randn(32, 10).astype(np.float32) * 0.1
+    W4 = np.random.randn(10, 10).astype(np.float32) * 0.1  # (1,10) @ (10,10) -> (1,10)
     b4 = np.zeros(10, dtype=np.float32)
 
     indices1 = np.array([0, 1, 2, 3, 4, 5, 6, 7], dtype=np.int64)
     indices2 = np.arange(10, dtype=np.int64)
-
-    W3 = np.random.randn(32, 32).astype(np.float32) * 0.1
-    b3 = np.zeros(32, dtype=np.float32)
-    W4 = np.random.randn(10, 10).astype(np.float32) * 0.1
-    b4 = np.zeros(10, dtype=np.float32)
 
     input_x = helper.make_tensor_value_info("input", TensorProto.FLOAT, [1, 16])
     output_y = helper.make_tensor_value_info("output", TensorProto.FLOAT, [1, 10])

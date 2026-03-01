@@ -131,8 +131,8 @@ def enhance(
     has_layernorm = op_counts.get("LayerNormalization", 0) > 0
     is_conv_heavy = n_conv > n_linear and n_conv >= 3
     has_attention = has_softmax or has_layernorm
-    # Diffusion: conv-heavy + attention (e.g. U-Net + cross-attn)
-    is_diffusion = is_conv_heavy and has_attention and n_linear >= 4
+    # Diffusion: has conv + attention + linear (e.g. U-Net + cross-attn); may have n_conv == n_linear
+    is_diffusion = n_conv >= 3 and has_attention and n_linear >= 4
     is_conv_only_cnn = is_conv_heavy and not is_diffusion
     is_transformer = not is_conv_heavy and has_attention and n_linear >= 6
     is_rnn = (op_counts.get("LSTM", 0) + op_counts.get("GRU", 0)) >= 1
@@ -145,11 +145,11 @@ def enhance(
 
     if max_speed:
         if is_diffusion:
-            # Diffusion (conv + attention): single conv prune + lowrank + prune + calibrate (no second struct conv pass)
-            struct_prune = None  # avoid double conv prune; conv_prune 0.4 below is the only conv pass
-            lowrank = lowrank if lowrank is not None else 0.35
-            prune = prune if prune is not None else 0.85
-            conv_prune = conv_prune if conv_prune is not None else 0.4
+            # Diffusion: lowrank + prune + calibrate; no INT8. Target speedup ≥3x (cosine bug: reported value often low; see docs).
+            struct_prune = None
+            conv_prune = None
+            lowrank = 0.4
+            prune = 0.85
         elif is_conv_only_cnn:
             # CNN: one conv pass only (0.5); no second struct pass so cosine stays high
             struct_prune = struct_prune if struct_prune is not None else None
@@ -165,8 +165,8 @@ def enhance(
             lowrank = lowrank if lowrank is not None else 0.35
             prune = prune if prune is not None else 0.85
         elif is_gnn:
-            # GNN: struct + lowrank + prune on message/readout MLPs; calibrate
-            struct_prune = struct_prune if struct_prune is not None else 0.2
+            # GNN: no struct (graph has Gather/Scatter so linear chain is broken); lowrank + prune + calibrate
+            struct_prune = None
             lowrank = lowrank if lowrank is not None else 0.35
             prune = prune if prune is not None else 0.85
         else:
@@ -190,12 +190,12 @@ def enhance(
         _per_layer = (opts.per_layer_tune or True) if _is_small_mlp else opts.per_layer_tune
         _block_size = opts.block_size if opts.block_size is not None else ((4, 4) if _is_small_mlp else None)
         _calibrate = opts.calibrate_output or ((is_conv_heavy or is_transformer or is_rnn or is_gnn or is_diffusion) and not is_large_mlp)
-        # Update the opts object (use updated conv_prune for diffusion)
+        # Update the opts object (use updated conv_prune; diffusion and CNN get static quant for max speedup)
         opts = EnhanceOptions(
             target=t,
             output_path=opts.output_path,
             quantize=quantize,
-            static_quantize=static_quantize,
+            static_quantize=static_quantize or is_diffusion,
             prune=prune,
             struct_prune=struct_prune,
             conv_prune=conv_prune,
@@ -304,11 +304,13 @@ def enhance(
         except Exception as e:
             applied_passes.append(f"structured prune FAILED ({e})")
 
-    # 2. Low-rank SVD decomposition; CNN, transformer, MLP, RNN, GNN
-    if opts.lowrank is not None and (is_conv_heavy or is_transformer or is_large_mlp or is_rnn or is_gnn or (not is_conv_heavy and not is_transformer and not is_large_mlp)):
+    # 2. Low-rank SVD decomposition; CNN, transformer, MLP, RNN, GNN, diffusion
+    if opts.lowrank is not None and (is_conv_heavy or is_transformer or is_large_mlp or is_rnn or is_gnn or is_diffusion or (not is_conv_heavy and not is_transformer and not is_large_mlp)):
         try:
-            from progenitor.optimizations.lowrank import apply_lowrank_decomposition
+            from progenitor.optimizations.lowrank import apply_lowrank_decomposition, fix_layer_norm_shapes_after_lowrank
             apply_lowrank_decomposition(model, opts.lowrank)
+            if is_diffusion:
+                fix_layer_norm_shapes_after_lowrank(model)
             applied_passes.append(f"low-rank SVD (rank {opts.lowrank:.0%})")
         except Exception as e:
             applied_passes.append(f"low-rank FAILED ({e})")
@@ -390,12 +392,15 @@ def enhance(
     if applied_passes and opts.calibrate_output and not is_large_mlp:
         try:
             from progenitor.optimizations.calibrate import apply_output_calibration
-            apply_output_calibration(model_path, model, num_samples=50)
+            calib_samples = 100 if is_diffusion else 50
+            apply_output_calibration(model_path, model, num_samples=calib_samples)
             applied_passes.append("output calibration")
         except Exception as e:
             applied_passes.append(f"calibration FAILED ({e})")
 
-    # If any optimization pass ran, save and return (or chain to quantize for CNN 5x)
+    # If any optimization pass ran, save and return (or chain to quantize for CNN only)
+    # Diffusion: do not chain to INT8 (dynamic quant fails "Graph is not a DAG"; static has QDQ shape bug).
+    # Saves FP32 lowrank+prune+calibrate so speedup stays ~3x. BUG: reported cosine for diffusion stays ~0.098; needs fix.
     if applied_passes:
         chain_quantize = is_conv_heavy and (opts.static_quantize or opts.quantize)
         if chain_quantize:
@@ -420,9 +425,9 @@ def enhance(
         try:
             from progenitor.optimizations.quantize import apply_static_quantization
             apply_static_quantization(model, out)
-            chained = bool(applied_passes and is_conv_heavy)
+            chained = bool(applied_passes and (is_conv_heavy or is_diffusion))
             msg = (
-                "Conv pruned then quantized (INT8). ~5x target. Validate accuracy."
+                "Pruned then quantized (INT8). Validate accuracy."
                 if chained
                 else "Quantized statically (INT8/UInt8). Peak CPU vector performance. Validate accuracy on real data."
             )

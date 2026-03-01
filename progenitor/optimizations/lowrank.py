@@ -166,3 +166,78 @@ def apply_lowrank_decomposition(model: ModelProto, rank_ratio: float = 0.25) -> 
 
     # Clear stale value_info — new intermediate tensors added, shapes changed.
     del model.graph.value_info[:]
+
+
+def fix_layer_norm_shapes_after_lowrank(model: ModelProto) -> None:
+    """
+    After lowrank, tensor shapes may change. Run shape inference and fix any
+    LayerNormalization whose scale/bias initializers no longer match the inferred input shape.
+    Preserves value_info so downstream (e.g. static quantization) sees correct shapes.
+    """
+    try:
+        from onnx import shape_inference
+        inferred = shape_inference.infer_shapes(model)
+    except Exception:
+        return
+    # inferred may be a new object; use it only for reading shapes
+    def _last_dim(vi) -> int | None:
+        if not vi.type.tensor_type.shape.dim:
+            return None
+        d = vi.type.tensor_type.shape.dim[-1]
+        if d.dim_value and d.dim_value > 0:
+            return d.dim_value
+        return None
+    name_to_dim: dict[str, int] = {}
+    for vi in list(inferred.graph.value_info) + list(inferred.graph.input):
+        dim = _last_dim(vi)
+        if dim is not None:
+            name_to_dim[vi.name] = dim
+    for out in inferred.graph.output:
+        dim = _last_dim(out)
+        if dim is not None:
+            name_to_dim[out.name] = dim
+    init_map = {i.name: numpy_helper.to_array(i) for i in model.graph.initializer}
+    to_replace: dict[str, np.ndarray] = {}
+    for node in model.graph.node:
+        if node.op_type != "LayerNormalization" or len(node.input) < 2:
+            continue
+        inp_name = node.input[0]
+        dim = name_to_dim.get(inp_name)
+        if dim is None:
+            continue
+        scale_name = node.input[1]
+        bias_name = node.input[2] if len(node.input) > 2 else None
+        if scale_name not in init_map:
+            continue
+        scale = init_map[scale_name]
+        if scale.ndim != 1 or scale.shape[0] == dim:
+            continue
+        new_scale = np.ones(dim, dtype=np.float32)
+        new_bias = np.zeros(dim, dtype=np.float32)
+        if bias_name and bias_name in init_map:
+            b = init_map[bias_name]
+            n = min(dim, b.size)
+            new_bias[:n] = b.flat[:n]
+        to_replace[scale_name] = new_scale
+        if bias_name:
+            to_replace[bias_name] = new_bias
+    if not to_replace:
+        # Still copy value_info from inferred so downstream sees shapes
+        del model.graph.value_info[:]
+        model.graph.value_info.extend(inferred.graph.value_info)
+        return
+    new_inits = []
+    for init in model.graph.initializer:
+        if init.name in to_replace:
+            new_inits.append(numpy_helper.from_array(to_replace[init.name], init.name))
+        else:
+            new_inits.append(init)
+    del model.graph.initializer[:]
+    model.graph.initializer.extend(new_inits)
+    # Re-run shape inference so value_info matches new initializers; keep it for quantizer
+    try:
+        inferred2 = shape_inference.infer_shapes(model)
+        del model.graph.value_info[:]
+        model.graph.value_info.extend(inferred2.graph.value_info)
+    except Exception:
+        pass

@@ -92,7 +92,7 @@ def main() -> int:
     sess_ref = ort.InferenceSession(
         str(args.model),
         ort.SessionOptions(),
-        providers=[before_providers[0]],
+        providers=list(before_providers),
     )
     feed = create_random_feed(sess_ref)
 
@@ -142,13 +142,13 @@ def main() -> int:
     if args.live:
         print()
 
-    # After: enhanced, quantized, or pruned with sparse backend
+    # After: enhanced, quantized, or pruned with sparse backend (native sparse is CPU-only)
     use_native_sparse = False
     use_int8_sparse = False
     effective_prune = args.prune
     if args.max_speed and effective_prune is None:
         effective_prune = 0.99
-    if effective_prune is not None:
+    if effective_prune is not None and result.target.id == "cpu":
         try:
             from progenitor.backends.accelerate_sparse_native import native_sparse_available
             if native_sparse_available():
@@ -254,7 +254,11 @@ def main() -> int:
         print()
         print("Running accuracy validation...")
         try:
-            metrics = validate_accuracy(args.model, result.output_path)
+            metrics = validate_accuracy(
+                args.model,
+                result.output_path,
+                execution_providers=before_providers,
+            )
             cos_sim = metrics['cosine_similarity']
             mse = metrics['mse']
             top1 = metrics['top1_match']

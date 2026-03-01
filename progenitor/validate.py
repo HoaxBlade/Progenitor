@@ -5,15 +5,23 @@ import onnxruntime as ort
 from pathlib import Path
 from progenitor.runner import create_random_feed
 
-def validate_accuracy(original_model_path: str | Path, enhanced_model_path: str | Path, *, seed: int = 42) -> dict:
+def validate_accuracy(
+    original_model_path: str | Path,
+    enhanced_model_path: str | Path,
+    *,
+    seed: int = 42,
+    execution_providers: tuple[str, ...] = ("CPUExecutionProvider",),
+) -> dict:
     """
     Compare outputs of original and enhanced models to measure accuracy degradation.
     Returns dict with 'mse', 'cosine_similarity', and 'top1_match'.
+    Use execution_providers to run on the same target as the benchmark (e.g. CUDA).
     """
     if seed is not None:
         np.random.seed(seed)
-    sess_orig = ort.InferenceSession(str(original_model_path), providers=["CPUExecutionProvider"])
-    sess_enh = ort.InferenceSession(str(enhanced_model_path), providers=["CPUExecutionProvider"])
+    providers = list(execution_providers)
+    sess_orig = ort.InferenceSession(str(original_model_path), providers=providers)
+    sess_enh = ort.InferenceSession(str(enhanced_model_path), providers=providers)
     
     feed = create_random_feed(sess_orig)
     

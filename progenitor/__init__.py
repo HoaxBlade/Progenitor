@@ -1,7 +1,7 @@
 """
 Progenitor: enhance compatible ML models to peak performance.
 
-Phase 1: ONNX inference on CPU (and optionally CUDA later).
+Phase 1: ONNX inference on CPU and CUDA.
 """
 
 from progenitor.api import enhance

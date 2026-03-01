@@ -21,10 +21,10 @@ Progenitor enhances only **compatible** model + target pairs. This document defi
 | Target   | ID    | Status   | Notes                                      |
 |----------|-------|----------|--------------------------------------------|
 | **CPU**  | `cpu` | Supported | x86_64 and ARM64. Default execution provider. |
-| **CUDA** | `cuda`| Planned  | Phase 1.1 after CPU is stable.             |
+| **CUDA** | `cuda`| Supported | GPU inference. Requires `onnxruntime-gpu`.   |
 
 - **CPU:** Uses `CPUExecutionProvider`. No GPU required.
-- **CUDA:** Will use `CUDAExecutionProvider` when added; requires `onnxruntime-gpu`.
+- **CUDA:** Uses `CUDAExecutionProvider` with CPU fallback. Install `onnxruntime-gpu`; same enhance pipeline, benchmark and validation run on GPU when `--target cuda`.
 
 ---
 
@@ -103,7 +103,7 @@ Passes are applied in a fixed order. Architecture is **auto-detected** and only 
 ## Runtimes and sparse backends
 
 - **Inference:** ONNX Runtime only. Other runtimes (TensorRT, OpenVINO) may be added as optional backends later.
-- **Execution providers (CPU):** `CPUExecutionProvider` (default).
+- **Execution providers:** `CPUExecutionProvider` (default), `CUDAExecutionProvider` (use `--target cuda` with `onnxruntime-gpu`).
 - **Sparse inference:** Unstructured pruned models get full speedup (5–15× or 100×+ for large MLP) only with a sparse-capable backend (e.g. native sparse, MKL, or INT8-sparse where available). The benchmark script uses sparse backends when present; otherwise it runs pruned weights as dense (smaller file, accuracy check).
 
 ---

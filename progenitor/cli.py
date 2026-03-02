@@ -10,7 +10,7 @@ from progenitor.api import enhance
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="progenitor",
-        description="Progenitor: enhance ML models (Phase 1) and software (Phase 2) to peak performance.",
+        description="Progenitor: enhance ML models (Phase 1), software (Phase 2), and devices (Phase 3) to peak performance.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -46,6 +46,16 @@ def main() -> None:
     p3.add_argument("--port", "-p", type=int, default=None, help="Port (default: 8080 or env PORT)")
     p3.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0 for deployability)")
     p3.set_defaults(func=_cmd_serve)
+
+    # enhance-device (Phase 3): measure → tune → measure on a device (mock adapter by default)
+    p4 = subparsers.add_parser("enhance-device", help="Enhance a device on your network (Phase 3). Measure baseline → apply tuning → measure after.")
+    p4.add_argument("--device", "-d", metavar="ID", default=None, help="Device ID (IP, hostname, or ID). Default: env PROGENITOR_DEVICE or 127.0.0.1 for dry-run.")
+    p4.add_argument("--list", action="store_true", help="List discoverable devices on the LAN (uses access module if set).")
+    p4.add_argument("--dry-run", action="store_true", help="Run pipeline with mock adapter (no real device).")
+    p4.add_argument("--power-profile", action="store_true", help="Apply performance power profile (opt-in).")
+    p4.add_argument("--cpu-governor", action="store_true", help="Set CPU governor to performance (opt-in).")
+    p4.add_argument("--reduce-animations", action="store_true", help="Reduce UI animations (opt-in, e.g. phones/PCs).")
+    p4.set_defaults(func=_cmd_enhance_device)
 
     args = parser.parse_args()
     args.func(args)
@@ -141,3 +151,60 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     except SystemExit as e:
         print(e.args[0] if e.args else "ORIGIN required.", file=sys.stderr)
         sys.exit(1)
+
+
+def _cmd_enhance_device(args: argparse.Namespace) -> None:
+    """Run Phase 3 pipeline: measure baseline → apply enhancements → measure after."""
+    from progenitor.devices import get_default_adapter, mock_adapter, run_pipeline
+    import os
+
+    if args.list:
+        adapter = mock_adapter() if args.dry_run else get_default_adapter()
+        devices = adapter.list_devices()
+        if not devices:
+            print("No devices discovered. Set PROGENITOR_ACCESS_MODULE to use an external discovery.")
+        else:
+            print("Devices (discoverable):")
+            for d in devices:
+                print(f"  {d}")
+        return
+
+    device_id = args.device or os.environ.get("PROGENITOR_DEVICE") or "127.0.0.1"
+    if args.dry_run:
+        device_id = "127.0.0.1"
+    adapter = mock_adapter() if args.dry_run else get_default_adapter()
+
+    try:
+        report = run_pipeline(
+            device_id,
+            adapter=adapter,
+            power_profile=args.power_profile,
+            cpu_governor=args.cpu_governor,
+            reduce_animations=args.reduce_animations,
+        )
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Print report
+    b, a = report.baseline, report.after
+    print("Device:", report.device_id, "| Type:", report.device_type.value)
+    print()
+    print("Before")
+    print("  CPU score:    ", f"{b.cpu_score:.1f}")
+    print("  I/O (MB/s):   ", f"{b.io_mb_s:.2f}")
+    if b.latency_ms:
+        print("  Latency (ms): ", f"{b.latency_ms:.1f}")
+    print()
+    print("After")
+    print("  CPU score:    ", f"{a.cpu_score:.1f}")
+    print("  I/O (MB/s):   ", f"{a.io_mb_s:.2f}")
+    if a.latency_ms:
+        print("  Latency (ms): ", f"{a.latency_ms:.1f}")
+    if a.applied_changes:
+        print("  Applied:      ", ", ".join(a.applied_changes))
+    print()
+    print("Speedup (CPU):  ", f"{report.speedup_cpu:.2f}x")
+    print("Speedup (I/O):  ", f"{report.speedup_io:.2f}x")
+    print()
+    print(report.message)

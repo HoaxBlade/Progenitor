@@ -131,6 +131,23 @@ We avoid: (1) plugging the device into your laptop, (2) sending the customer a l
 - **You trigger enhancement:** From your infra on that network (e.g. a server or tool you run), you target their device over the network and run Progenitor. They asked; you execute. What runs on their device (profile, agent, etc.) is still TBD; the **model** is: they’re on your network → they say “enhance this” → you apply enhancement to their device from your side.
 - **No customer control flow:** The customer does not get a page to click or an app to approve; they just asked you. You’re the one who initiates and controls the enhancement.
 
+### Implementation plan: network-based access (zero install, zero link)
+
+To reach the device from your side when they’re on your network, without the customer installing an app or opening a link, we use **network-based access**. Below is the implementation plan; the access component is implemented separately (not in this repo).
+
+| Step | Description |
+|------|--------------|
+| **1. Target selection** | Choose specific device types and OS versions to support first (e.g. Android 12 on chipset X, or Windows 10/11 with service Y). Support is scoped per target; expand later. |
+| **2. Reachable surface** | For each target, identify which components accept traffic from the local network (e.g. a system service, driver, or stack that listens on the LAN). Document in the Phase 3 compatibility spec. |
+| **3. Access mechanism** | For each reachable component, obtain or develop the mechanism that establishes a foothold on the device over the network (research / authorized channel). This is the “get in” module; maintained and versioned per target. |
+| **4. Access module** | Implement a small component that: (a) runs on your infra on the same network, (b) discovers or is given the target device (e.g. by IP), (c) invokes the access mechanism for that device type, (d) receives confirmation of access. |
+| **5. Payload delivery** | Once access is established, the same channel is used to deploy and run the enhancement payload (measure baseline → apply Progenitor tuning → measure again). Progenitor enhancement logic lives here; the access module only provides the channel. |
+| **6. Operator flow** | End-to-end: operator runs the tool, selects or discovers the device on the LAN, triggers “enhance”; the tool runs the access module then the enhancement payload. Customer has already given verbal consent; no UI on their side. |
+
+**Out of scope in this repo:** Implementation of the access mechanism (step 3) and any target-specific access code. This repo contains the enhancement pipeline and the operator-facing tool that *calls* the access module; the access module itself is implemented and integrated elsewhere.
+
+**In scope in this repo:** Enhancement pipeline (measure → tune → measure), Phase 3 compatibility spec (targets, reachable surface descriptions, where the access module plugs in), operator CLI/tool interface, and docs.
+
 ### Scope (Phase 3) — high level
 
 - Progenitor targets **any type of device** (phones, PCs first; then drones, servers, vehicles, IoT, etc.) that meets compatibility.

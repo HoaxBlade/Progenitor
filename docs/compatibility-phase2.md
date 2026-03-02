@@ -37,7 +37,7 @@ Progenitor Phase 2 applies the same “enhance to peak” idea to **non-ML softw
 
 - Full rewrites or new implementations of the application.
 - ML model training or inference (that stays in Phase 1).
-- Physical machine or hardware control (Phase 3).
+- Phase 3: infecting any device and boosting performance to 50×+ (separate scope).
 - Every language, framework, and platform.
 
 ---

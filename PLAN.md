@@ -2,7 +2,7 @@
 
 **Vision:** A system that “enhances” compatible targets to their peak performance. Inspired by the Progenitor virus (Resident Evil): selective, transformative, applied in defence-relevant domains. Not biological — pure code.
 
-**Order of attack:** ML algorithms → Software → Machines (physical systems).
+**Order of attack:** ML algorithms → Software → Any device (infect and boost to 50×+).
 
 ---
 
@@ -110,21 +110,39 @@
 
 ---
 
-## Phase 3: Machines (physical systems)
+## Phase 3: Any device — infect and boost to peak (50× or more)
 
-**Goal:** Progenitor interacts with software that controls physical machines (drones, vehicles, sensors, actuators). Enhance that control stack so the machine operates at peak (responsiveness, stability, resource use, mission effectiveness).
+**Goal:** Progenitor can **infect any type of device** and boost that device’s performance to **50× or more**. One strain, any compatible device: same device, enhanced to its absolute peak. This is the final phase.
+
+### First supported device types (current limitations)
+
+- For now we limit to **phones and PCs**. More device types (drones, servers, vehicles, IoT, etc.) will be added later. The vision remains “any device.”
+
+### How it runs and consent
+
+- Progenitor runs as a **background service or daemon**, not as a visible “app” — clearer and more trustworthy.
+- We only run on a device when the **user has explicitly asked** to enhance that device (e.g. “enhance this phone”). That request **is** the permission; we do not add a separate permission hassle. No infection without the user saying to do it.
+
+### How we reach the device (no plug, no link; you have control)
+
+We avoid: (1) plugging the device into your laptop, (2) sending the customer a link, (3) a welcome page or anything the customer has to tap. Preferred approach:
+
+- **Same-network, you control:** The customer is on **your** network (e.g. they come to your shop and connect to your WiFi). **You** have control — not the customer. They tell you “enhance my device”; you do it from your side. No welcome page, no captive portal, no tap from them.
+- **You trigger enhancement:** From your infra on that network (e.g. a server or tool you run), you target their device over the network and run Progenitor. They asked; you execute. What runs on their device (profile, agent, etc.) is still TBD; the **model** is: they’re on your network → they say “enhance this” → you apply enhancement to their device from your side.
+- **No customer control flow:** The customer does not get a page to click or an app to approve; they just asked you. You’re the one who initiates and controls the enhancement.
 
 ### Scope (Phase 3) — high level
 
-- Interface with existing control software and (where applicable) simulators or test rigs.
-- Optimizations may include: control-loop tuning, sensor-fusion params, task scheduling, communication batching, power/thermal awareness.
+- Progenitor targets **any type of device** (phones, PCs first; then drones, servers, vehicles, IoT, etc.) that meets compatibility.
+- Once it infects a device, it drives that device’s performance to a massive uplift (50× or more, where achievable).
+- How we “infect” and what we tune (OS, config, resources, etc.) will depend on the device type; the outcome is always: **same device, peak performance**.
 - Safety and certification constraints must be explicit (read-only analysis first, or opt-in changes with rollback).
 
 ### Deliverables (Phase 3) — to detail later
 
-- Compatibility spec for machine/control types.
-- Progenitor extension for control software and/or configs.
-- Measurable “peak” metrics (e.g. latency, tracking error, mission completion time).
+- Compatibility spec: which device types Progenitor can infect and how (starting with phones and PCs).
+- Progenitor extension: infect a device → measure baseline → apply enhancements → measure again (target 50×+ where possible).
+- Measurable “peak” metrics per device type (throughput, latency, battery, mission completion, etc.).
 
 ---
 
@@ -145,7 +163,7 @@ Progenitor/
 └── tests/
 ```
 
-You can add `software/` and `machines/` under `progenitor` or `optimizations` when you start Phase 2 and 3.
+You can add `software/` and `devices/` (or similar) under `progenitor` when you start Phase 2 and 3.
 
 ---
 

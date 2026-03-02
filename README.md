@@ -1,6 +1,6 @@
 # Progenitor
 
-A system that enhances compatible targets to **peak performance** on **the hardware they already have** — ML algorithms first, then software, then physical machines. Defence-oriented; code-only (no biology).
+A system that enhances compatible targets to **peak performance** on **the hardware they already have** — ML algorithms first, then software, then any device (infect and boost to 50×+). Defence-oriented; code-only (no biology).
 
 Inspired by the Progenitor virus: one “strain,” selective compatibility, measurable enhancement. **Same device, enhanced to its peak** — no GPU required; built for legacy and edge (e.g. older military systems).
 

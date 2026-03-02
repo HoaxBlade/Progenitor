@@ -4,6 +4,14 @@ Artifacts are directories containing a **progenitor.yaml** manifest. Progenitor 
 
 ---
 
+## Make the real website faster (no code changes)
+
+**Customer does one thing:** Deploy Progenitor in front of their site and point their domain to it. We do the rest — cache, compress, better headers. Same URL, faster for everyone. No code or config editing.
+
+- **Run the proxy:** `progenitor serve` (set env **ORIGIN** to their site URL), or deploy the Docker image. See [docs/phase2-serve-no-code-changes.md](../docs/phase2-serve-no-code-changes.md).
+
+---
+
 ## All commands
 
 ### Inspect (see what the app returns)

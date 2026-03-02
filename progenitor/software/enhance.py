@@ -1,15 +1,16 @@
-"""Apply opt-in tuning levers to a software artifact, or recommend improvements for any URL."""
+"""Apply opt-in tuning levers to a software artifact, or enhance any website by URL."""
 
 from __future__ import annotations
 
 import os
+import signal
+import sys
+import time
 from pathlib import Path
-from typing import Any
 
-from progenitor.software.manifest import load_manifest, SoftwareManifest, LeverSpec
+from progenitor.software.manifest import load_manifest, LeverSpec
 
 ENHANCED_ENV_FILENAME = ".env.progenitor"
-RECOMMENDATIONS_FILENAME = "progenitor-recommendations.txt"
 
 
 def _safe_workers_value(spec: LeverSpec, explicit_value: int | None = None) -> int:
@@ -41,7 +42,6 @@ def enhance_software(
     out_path = out_path.resolve()
 
     env_lines: list[str] = []
-    # Only set what was requested
     if tune_workers and "workers" in manifest.tune:
         spec = manifest.tune["workers"]
         value = _safe_workers_value(spec, workers)
@@ -49,7 +49,6 @@ def enhance_software(
         env_lines.append("")
 
     if not env_lines:
-        # Write a comment so the file exists and user sees nothing was auto-applied
         env_lines = ["# Progenitor: no levers enabled. Use --tune-workers (or other --tune-* flags) to apply.\n"]
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -57,107 +56,114 @@ def enhance_software(
     return out_path
 
 
-def _fetch_headers(url: str, timeout: int = 15) -> dict[str, str]:
-    """HEAD request; return lowercase header dict. Handles SSL on macOS."""
-    import ssl
-    import urllib.request
-    from urllib.error import URLError
-
-    def _open(ctx: ssl.SSLContext | None) -> dict[str, str]:
-        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx)) if ctx else urllib.request.build_opener()
-        req = urllib.request.Request(url, method="HEAD")
-        with opener.open(req, timeout=timeout) as r:
-            return {k.lower(): v for k, v in r.headers.items()}
-
-    def _is_ssl_failure(exc: BaseException) -> bool:
-        if isinstance(exc, ssl.SSLError):
-            return True
-        if isinstance(exc, URLError) and isinstance(getattr(exc, "reason", None), ssl.SSLError):
-            return True
-        return False
-
-    try:
-        import certifi
-        ctx = ssl.create_default_context(cafile=certifi.where())
-    except ImportError:
-        ctx = ssl.create_default_context()
-    try:
-        return _open(ctx)
-    except Exception as e:
-        if _is_ssl_failure(e):
-            ctx = ssl._create_unverified_context()
-            return _open(ctx)
-        raise
-
-
-def _detect_stack(headers: dict[str, str]) -> list[str]:
-    """Infer stack from response headers."""
-    detected: list[str] = []
-    powered = (headers.get("x-powered-by") or "").lower()
-    server = (headers.get("server") or "").lower()
-    if "next.js" in powered or "next" in powered:
-        detected.append("Next.js")
-    if "vercel" in server:
-        detected.append("Vercel")
-    if "express" in powered:
-        detected.append("Express")
-    if "node" in powered or "node" in server:
-        detected.append("Node")
-    if "nginx" in server:
-        detected.append("Nginx")
-    if "gunicorn" in server or "gunicorn" in powered:
-        detected.append("Gunicorn")
-    if "apache" in server:
-        detected.append("Apache")
-    if not detected:
-        detected.append("Unknown (generic HTTP)")
-    return detected
-
-
-def _recommendations_for_stack(stack: list[str]) -> list[str]:
-    """Concrete recommendations by detected stack."""
-    recs: list[str] = []
-    s = " ".join(stack).lower()
-    if "next.js" in s or "vercel" in s:
-        recs.append("Next.js: Use ISR (revalidate) or static generation for pages that don’t need per-request data.")
-        recs.append("Next.js: Enable image optimization (next/image) and consider smaller image sizes.")
-        recs.append("Vercel: Enable Edge where possible; use caching headers for static assets.")
-        recs.append("Next.js: Reduce client-side JS with dynamic imports and avoid large dependencies on first load.")
-    if "express" in s or "node" in s:
-        recs.append("Node: Enable gzip/brotli compression (e.g. compression middleware).")
-        recs.append("Node: Set Cache-Control headers for static and cacheable responses.")
-        recs.append("Node: Consider clustering (cluster module) to use all CPU cores.")
-    if "nginx" in s:
-        recs.append("Nginx: Enable gzip and static asset caching; tune worker_connections and keepalive.")
-    if "gunicorn" in s:
-        recs.append("Gunicorn: Tune workers (e.g. 2–4 × CPU cores) and use a reverse proxy (Nginx) for static files.")
-    recs.append("General: Prefer CDN/caching for static assets and set long cache headers where safe.")
-    return recs
+def _format_size(n: int) -> str:
+    if n >= 1024 * 1024:
+        return f"{n / (1024*1024):.1f} MB"
+    if n >= 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{n} B"
 
 
 def enhance_software_by_url(
     url: str,
-    output_path: str | Path | None = None,
-) -> Path:
+    *,
+    target: str = "latency",
+    proxy: bool = False,
+    repeat: int = 20,
+    warmup: int = 3,
+    api_paths: list[str] | None = None,
+) -> None:
     """
-    Improve any website: fetch URL, detect stack from headers, write actionable recommendations.
-    No progenitor.yaml or artifact path required.
+    Measure any website, analyze for the chosen target, and print what can be improved
+    plus copy-pasteable commands. All output to stdout (no report file).
+    If proxy=True, start local proxy and show real before/after speedup; proxy stays running until Ctrl+C.
     """
-    url = url.rstrip("/") or "/"
-    headers = _fetch_headers(url)
-    stack = _detect_stack(headers)
-    recs = _recommendations_for_stack(stack)
-    out = Path(output_path).resolve() if output_path else Path.cwd() / RECOMMENDATIONS_FILENAME
-    lines = [
-        f"# Progenitor recommendations for {url}",
-        "",
-        "Detected stack: " + ", ".join(stack),
-        "",
-        "Recommendations:",
-        "",
-    ]
-    for i, r in enumerate(recs, 1):
-        lines.append(f"  {i}. {r}")
-    lines.append("")
-    out.write_text("\n".join(lines), encoding="utf-8")
-    return out
+    from progenitor.software.measure import measure, measure_api
+    from progenitor.software.analyze import analyze
+    from progenitor.software.proxy import run_proxy_and_measure
+
+    url = url.strip().rstrip("/") or "/"
+    if not url.startswith("http://") and not url.startswith("https://"):
+        url = "https://" + url
+
+    print(f"Measuring {url} ({repeat} requests, warmup {warmup})...")
+    print()
+
+    m = measure(url, warmup=warmup, repeat=repeat)
+    if api_paths and target == "api":
+        api_timings = measure_api(url, api_paths, warmup=2, repeat=5)
+        from progenitor.software.measure import SiteMeasurement
+        m = SiteMeasurement(
+            url=m.url,
+            ttfb_ms=m.ttfb_ms,
+            total_ms=m.total_ms,
+            size_bytes=m.size_bytes,
+            compressed=m.compressed,
+            cache_control=m.cache_control,
+            etag=m.etag,
+            status_code=m.status_code,
+            server=m.server,
+            powered_by=m.powered_by,
+            p99_ms=m.p99_ms,
+            raw_times_ms=m.raw_times_ms,
+            api_timings=api_timings,
+        )
+
+    report = analyze(m, target)
+
+    # Print before
+    print("Target:", target)
+    print()
+    print("Before")
+    print("  TTFB (median):   ", f"{report.before.ttfb_ms:.0f} ms", "  p99:", f"{report.before.p99_ms:.0f} ms")
+    print("  Total (median):  ", f"{report.before.total_ms:.0f} ms")
+    print("  Response size:   ", _format_size(report.before.size_bytes), "  Compression:", "yes" if report.before.compressed else "none")
+    print("  Cache-Control:   ", report.before.cache_control or "(none)")
+    print("  Server:          ", report.before.server or "(none)")
+    print()
+
+    if report.findings:
+        print("These can be improved")
+        for f in report.findings:
+            print("  [{}]  {}".format(f.severity, f.detail))
+        print()
+        print("Commands that will do it")
+        for i, f in enumerate(report.findings, 1):
+            print(f"  {i}.", f.detail.split(".")[0] + ".")
+            for line in f.fix_commands:
+                print("     ", line)
+            print()
+    else:
+        print("No issues found for this target.")
+        print()
+
+    print("Estimated speedup:", report.estimated_speedup)
+    print()
+
+    if proxy:
+        print("Measuring direct (before)...")
+        before, after, speedup, px = run_proxy_and_measure(url, warmup=warmup, repeat=repeat)
+        print("  Total (median):", f"{before.total_ms:.0f} ms", "  p99:", f"{before.p99_ms:.0f} ms", "  Size:", _format_size(before.size_bytes))
+        print()
+        print("Measuring through proxy (after, repeat visits)...")
+        print("  Total (median):", f"{after.total_ms:.0f} ms", "  p99:", f"{after.p99_ms:.0f} ms", "  Size:", _format_size(after.size_bytes))
+        print()
+        print(f"Speedup: {speedup:.1f}x (repeat visits from cache)")
+        print()
+        print(f"Proxy running at {px.base_url()} — use this URL instead of the original. Ctrl+C to stop.")
+        print()
+
+        def shutdown(sig=None, frame=None):
+            px.stop()
+            sys.exit(0)
+
+        try:
+            signal.signal(signal.SIGINT, shutdown)
+            signal.signal(signal.SIGTERM, shutdown)
+        except (AttributeError, ValueError):
+            pass  # Windows or unsupported
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            shutdown()

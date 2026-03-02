@@ -26,15 +26,26 @@ def main() -> None:
     p.add_argument("--max-speed", action="store_true", help="Chain all optimizations for maximum speedup (~30-50×)")
     p.set_defaults(func=_cmd_enhance)
 
-    # enhance-software (Phase 2): any URL (no YAML) or artifact with progenitor.yaml
+    # enhance-software (Phase 2): any URL or artifact with progenitor.yaml
     p2 = subparsers.add_parser("enhance-software", help="Enhance any website (--url) or an artifact with progenitor.yaml.")
     p2.add_argument("artifact", type=Path, nargs="?", default=None, help="Path to artifact dir with progenitor.yaml (optional if --url is set)")
-    p2.add_argument("--url", metavar="URL", default=None, help="Any website URL; we detect stack and write recommendations (no YAML needed)")
+    p2.add_argument("--url", metavar="URL", default=None, help="Any website URL; we measure and show what to improve + commands (no YAML needed)")
+    p2.add_argument("--target", default="latency", choices=("latency", "api", "payload", "caching", "all"), help="What to improve (default: latency)")
+    p2.add_argument("--proxy", action="store_true", help="Start local proxy; show before/after speedup; proxy stays running until Ctrl+C")
+    p2.add_argument("--api-paths", metavar="PATHS", default=None, help="Comma-separated paths to probe (e.g. /api/users,/api/items) when --target api")
+    p2.add_argument("--repeat", type=int, default=20, metavar="N", help="Requests per measurement (default: 20)")
+    p2.add_argument("--warmup", type=int, default=3, metavar="N", help="Warmup requests (default: 3)")
     p2.add_argument("--tune-workers", action="store_true", help="Enable workers lever (artifact mode only; safe cap by CPU count)")
     p2.add_argument("--workers", type=int, default=None, metavar="N", help="Set workers to N (used with --tune-workers)")
     p2.add_argument("--output-env", type=Path, default=None, help="Write env to this path (artifact mode; default: <artifact>/.env.progenitor)")
-    p2.add_argument("--output", "-o", type=Path, default=None, help="Write recommendations to this file (URL mode; default: progenitor-recommendations.txt in cwd)")
     p2.set_defaults(func=_cmd_enhance_software)
+
+    # serve (Phase 2): run proxy in front of ORIGIN — customer deploys once, points domain, no code changes
+    p3 = subparsers.add_parser("serve", help="Run Progenitor proxy in front of a site. Set ORIGIN to the real site URL; point your domain here. No code changes.")
+    p3.add_argument("--origin", "-o", metavar="URL", default=None, help="Origin URL (e.g. https://your-site.com). Default: env ORIGIN.")
+    p3.add_argument("--port", "-p", type=int, default=None, help="Port (default: 8080 or env PORT)")
+    p3.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0 for deployability)")
+    p3.set_defaults(func=_cmd_serve)
 
     args = parser.parse_args()
     args.func(args)
@@ -75,11 +86,16 @@ def _cmd_enhance(args: argparse.Namespace) -> None:
 def _cmd_enhance_software(args: argparse.Namespace) -> None:
     from progenitor.software.enhance import enhance_software, enhance_software_by_url
     if args.url:
-        # Any website: no YAML, no artifact. Detect stack and write recommendations.
+        api_paths = [p.strip() for p in args.api_paths.split(",")] if args.api_paths else None
         try:
-            out = enhance_software_by_url(args.url, output_path=args.output)
-            print(f"Recommendations written: {out}")
-            print("Detected stack and suggested improvements. Apply changes in your app or server config.")
+            enhance_software_by_url(
+                args.url,
+                target=args.target,
+                proxy=args.proxy,
+                repeat=args.repeat,
+                warmup=args.warmup,
+                api_paths=api_paths,
+            )
         except Exception as e:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
@@ -114,4 +130,14 @@ def _cmd_enhance_software(args: argparse.Namespace) -> None:
         sys.exit(1)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _cmd_serve(args: argparse.Namespace) -> None:
+    """Run proxy in front of ORIGIN. Customer deploys this once, sets ORIGIN, points domain — real site gets faster for everyone."""
+    from progenitor.software.proxy import serve_standalone
+    try:
+        serve_standalone(host=args.host, port=args.port, origin=args.origin)
+    except SystemExit as e:
+        print(e.args[0] if e.args else "ORIGIN required.", file=sys.stderr)
         sys.exit(1)

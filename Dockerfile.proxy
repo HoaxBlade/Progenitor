@@ -1,0 +1,18 @@
+# Progenitor proxy: run in front of any site. One deploy, set ORIGIN, point domain — no code changes.
+# Build: docker build -f Dockerfile.proxy -t progenitor-proxy .
+# Run:   docker run -e ORIGIN=https://your-site.com -p 8080:8080 progenitor-proxy
+# Then point your domain (or a subdomain) to this container's host. Same URL, faster for everyone.
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY pyproject.toml .
+COPY progenitor/ progenitor/
+RUN pip install --no-cache-dir -e .
+
+ENV PORT=8080
+
+EXPOSE 8080
+
+CMD ["progenitor", "serve"]

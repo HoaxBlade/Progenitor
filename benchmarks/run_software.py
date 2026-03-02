@@ -20,17 +20,10 @@ def main() -> int:
     ap.add_argument("--url", required=True, help="Base URL to request (e.g. http://127.0.0.1:8000/)")
     ap.add_argument("--repeat", type=int, default=50, help="Number of requests (default 50)")
     ap.add_argument("--warmup", type=int, default=5, help="Warmup requests (default 5)")
+    ap.add_argument("--output", "-o", type=Path, default=None, help="Write results to this file")
     args = ap.parse_args()
 
-    try:
-        import urllib.request
-    except ImportError:
-        try:
-            import urllib2 as urllib  # type: ignore
-            urllib.request = urllib
-        except ImportError:
-            print("Error: need urllib (standard library)", file=sys.stderr)
-            return 1
+    import urllib.request
 
     url = args.url.rstrip("/") + "/"
     times_ms: list[float] = []
@@ -52,7 +45,7 @@ def main() -> int:
     avg_ms = total_ms / n if n else 0
     times_sorted = sorted(times_ms)
     p50 = times_sorted[n // 2] if n else 0
-    p99 = times_sorted[int(n * 0.99)] if n >= 2 else times_sorted[-1] if n else 0
+    p99 = times_sorted[min(n - 1, int(n * 0.99))] if n else 0
     throughput = 1000.0 / avg_ms if avg_ms > 0 else 0
 
     # Formatted, readable output
@@ -73,6 +66,21 @@ def main() -> int:
     print("  Summary:  One request takes about {:.0f} ms on average; the server can handle about {:.1f} requests per second."
           .format(avg_ms, throughput))
     print()
+
+    if args.output:
+        args.output = Path(args.output)
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        lines = [
+            f"URL: {url}",
+            f"Requests: {n} (warmup {args.warmup})",
+            f"Average latency: {avg_ms:.2f} ms",
+            f"Median (p50): {p50:.2f} ms",
+            f"p99: {p99:.2f} ms",
+            f"Throughput: {throughput:.1f} req/s",
+        ]
+        args.output.write_text("\n".join(lines), encoding="utf-8")
+        print(f"  Results written to {args.output}")
+
     return 0
 
 

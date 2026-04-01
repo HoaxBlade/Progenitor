@@ -20,7 +20,7 @@ from progenitor.devices.types import (
     DeviceType,
 )
 from progenitor.devices.measure import measure_baseline, measure_after
-from progenitor.devices.enhance import apply_enhancements
+from progenitor.devices.enhance import apply_enhancements, EnhanceOptions, LeverResult
 from progenitor.devices.pipeline import run_pipeline
 
 __all__ = [
@@ -36,5 +36,7 @@ __all__ = [
     "measure_baseline",
     "measure_after",
     "apply_enhancements",
+    "EnhanceOptions",
+    "LeverResult",
     "run_pipeline",
 ]

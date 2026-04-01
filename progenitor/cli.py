@@ -53,20 +53,57 @@ def main() -> None:
         help="Enhance a device on your network (Phase 3). Measure baseline → apply tuning → measure after.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
+            "Transports:\n"
+            "  --ssh              Linux/Windows via SSH (key or password)\n"
+            "  --adb              Android via ADB (USB or TCP)\n"
+            "  --dry-run          No real device; simulated metrics\n\n"
             "Linux levers:   --cpu-governor  --io-scheduler  --swappiness  --transparent-hugepages\n"
             "Windows levers: --power-plan  --disable-visual-effects  --disable-background-apps  --game-mode\n"
-            "Android levers: --performance-profile  --disable-doze  --reduce-animations  --background-limits\n"
+            "Android levers: --performance-profile  --disable-doze  --reduce-animations  --background-limits\n\n"
+            "Examples:\n"
+            "  # Linux PC over SSH (key auth)\n"
+            "  progenitor enhance-device --device 192.168.1.10 --device-type pc_linux \\\n"
+            "      --ssh --ssh-user ubuntu --ssh-key ~/.ssh/id_rsa \\\n"
+            "      --cpu-governor --io-scheduler --swappiness\n\n"
+            "  # Windows PC over SSH (OpenSSH must be enabled on the PC)\n"
+            "  progenitor enhance-device --device 192.168.1.11 --device-type pc_windows \\\n"
+            "      --ssh --ssh-user administrator \\\n"
+            "      --power-plan --disable-visual-effects\n\n"
+            "  # Android phone via USB ADB\n"
+            "  progenitor enhance-device --device-type phone_android \\\n"
+            "      --adb --performance-profile --reduce-animations\n\n"
+            "  # Android phone via wireless ADB\n"
+            "  progenitor enhance-device --device 192.168.1.12 --device-type phone_android \\\n"
+            "      --adb --adb-serial 192.168.1.12:5555 \\\n"
+            "      --performance-profile --reduce-animations --disable-doze\n"
         ),
     )
-    p4.add_argument("--device", "-d", metavar="ID", default=None,
-                    help="Device ID (IP, hostname). Default: env PROGENITOR_DEVICE or 127.0.0.1 for dry-run.")
+    p4.add_argument("--device", "-d", metavar="IP/HOST", default=None,
+                    help="Device IP or hostname. Default: env PROGENITOR_DEVICE.")
     p4.add_argument("--device-type", metavar="TYPE", default=None,
                     choices=("phone_android", "pc_windows", "pc_linux"),
-                    help="Override device type detection (phone_android | pc_windows | pc_linux).")
+                    help="Device type: phone_android | pc_windows | pc_linux")
     p4.add_argument("--list", action="store_true",
-                    help="List discoverable devices on the LAN (uses access module if set).")
+                    help="List discoverable/connected devices and exit.")
     p4.add_argument("--dry-run", action="store_true",
-                    help="Run pipeline with mock adapter and simulated metrics (no real device).")
+                    help="Run with simulated metrics — no real device needed.")
+    # Transport flags
+    _tg = p4.add_argument_group("Transport (pick one; omit for --dry-run)")
+    _tg.add_argument("--ssh", action="store_true",
+                     help="Connect via SSH (Linux/Windows).")
+    _tg.add_argument("--ssh-user", metavar="USER", default=None,
+                     help="SSH username.")
+    _tg.add_argument("--ssh-key", metavar="PATH", default=None,
+                     help="Path to SSH private key (e.g. ~/.ssh/id_rsa).")
+    _tg.add_argument("--ssh-password", metavar="PASS", default=None,
+                     help="SSH password (key is preferred; needs paramiko: pip install paramiko).")
+    _tg.add_argument("--ssh-port", type=int, default=22, metavar="PORT",
+                     help="SSH port (default: 22).")
+    _tg.add_argument("--adb", action="store_true",
+                     help="Connect via ADB (Android).")
+    _tg.add_argument("--adb-serial", metavar="SERIAL", default=None,
+                     help="ADB device serial (e.g. 192.168.1.10:5555 or emulator-5554). "
+                          "Default: first connected device.")
     # Linux levers
     _lg = p4.add_argument_group("Linux levers")
     _lg.add_argument("--cpu-governor", action="store_true",
@@ -195,28 +232,59 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
-def _cmd_enhance_device(args: argparse.Namespace) -> None:
+def _build_adapter(args: "argparse.Namespace", device_id: str, dtype: "DeviceType | None"):
+    """Build the right adapter from CLI transport flags."""
+    from progenitor.devices import mock_adapter
+    from progenitor.devices.types import DeviceType
+
+    if args.dry_run:
+        return mock_adapter()
+    if args.ssh:
+        from progenitor.devices.transports.ssh import SSHAdapter
+        return SSHAdapter(
+            host=device_id,
+            user=args.ssh_user,
+            port=args.ssh_port,
+            key_path=args.ssh_key,
+            password=args.ssh_password,
+            device_type=dtype or DeviceType.PC_LINUX,
+        )
+    if args.adb:
+        from progenitor.devices.transports.adb import ADBAdapter
+        return ADBAdapter(serial=args.adb_serial)
+    # No transport flag: mock adapter (safe default)
+    return mock_adapter()
+
+
+def _cmd_enhance_device(args: "argparse.Namespace") -> None:
     """Run Phase 3 pipeline: measure baseline → apply enhancements → measure after."""
     import os
-    from progenitor.devices import get_default_adapter, mock_adapter, run_pipeline
+    from progenitor.devices import run_pipeline, mock_adapter
     from progenitor.devices.enhance import EnhanceOptions
     from progenitor.devices.types import DeviceType
 
+    dtype: DeviceType | None = DeviceType(args.device_type) if args.device_type else None
+
     if args.list:
-        adapter = mock_adapter() if args.dry_run else get_default_adapter()
+        device_id = args.device or os.environ.get("PROGENITOR_DEVICE") or ""
+        adapter = _build_adapter(args, device_id, dtype)
         devices = adapter.list_devices()
         if not devices:
-            print("No devices discovered. Set PROGENITOR_ACCESS_MODULE to use an external discovery.")
+            print("No devices found. For ADB: ensure USB debugging is on and run `adb devices`.")
+            print("For SSH: specify --device <IP>.")
         else:
-            print("Devices (discoverable):")
+            print("Devices:")
             for d in devices:
                 print(f"  {d}")
         return
 
+    if not args.dry_run and not args.ssh and not args.adb:
+        print("No transport specified. Use --ssh, --adb, or --dry-run.")
+        print("Run `progenitor enhance-device --help` for examples.")
+        import sys; sys.exit(1)
+
     device_id = args.device or os.environ.get("PROGENITOR_DEVICE") or "127.0.0.1"
-    if args.dry_run:
-        device_id = args.device or "127.0.0.1"
-    adapter = mock_adapter() if args.dry_run else get_default_adapter()
+    adapter = _build_adapter(args, device_id, dtype)
 
     dtype: DeviceType | None = None
     if args.device_type:

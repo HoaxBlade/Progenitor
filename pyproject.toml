@@ -21,8 +21,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "pytest-cov>=4.0"]
-sparse = ["torch>=2.0"]  # PyTorch sparse backend for --prune
-sparse-mkl = ["sparse-dot-mkl"]  # Intel MKL sparse: 5–15× on Intel CPU (requires MKL runtime)
+sparse = ["torch>=2.0"]          # PyTorch sparse backend for --prune
+sparse-mkl = ["sparse-dot-mkl"] # Intel MKL sparse: 5–15× on Intel CPU (requires MKL runtime)
+ssh = ["paramiko>=3.0"]          # Phase 3: SSH transport for Linux/Windows (--ssh)
 
 [project.scripts]
 progenitor = "progenitor.cli:main"

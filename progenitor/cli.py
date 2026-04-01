@@ -104,6 +104,12 @@ def main() -> None:
     _tg.add_argument("--adb-serial", metavar="SERIAL", default=None,
                      help="ADB device serial (e.g. 192.168.1.10:5555 or emulator-5554). "
                           "Default: first connected device.")
+    _tg.add_argument("--agent", action="store_true",
+                     help="Connect via Progenitor Agent (any device; agent must be running on target).")
+    _tg.add_argument("--agent-token", metavar="TOKEN", default=None,
+                     help="Shared secret token for the agent. Get it from: progenitor agent token")
+    _tg.add_argument("--agent-port", type=int, default=7777, metavar="PORT",
+                     help="Agent port (default: 7777).")
     # Linux levers
     _lg = p4.add_argument_group("Linux levers")
     _lg.add_argument("--cpu-governor", action="store_true",
@@ -135,6 +141,33 @@ def main() -> None:
     _ag.add_argument("--background-limits", action="store_true",
                      help="Limit background process count to 4 (free CPU/RAM for foreground).")
     p4.set_defaults(func=_cmd_enhance_device)
+
+    # agent (Phase 3): manage the Progenitor Agent on this or a target device
+    p5 = subparsers.add_parser(
+        "agent",
+        help="Manage the Progenitor Agent (install on target device for zero-SSH access).",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Subcommands:\n"
+            "  token    Generate a new shared-secret token\n"
+            "  start    Start the agent on THIS machine (run on the target device)\n"
+            "  install  Print the one-liner install command for the target device\n\n"
+            "Workflow:\n"
+            "  1. Operator: progenitor agent token         → get a token\n"
+            "  2. Target:   progenitor agent start --token <tok>  → start agent\n"
+            "     Or:       pip install progenitor && progenitor agent start --token <tok>\n"
+            "  3. Operator: progenitor enhance-device --device <ip> --agent --agent-token <tok> ...\n"
+        ),
+    )
+    p5.add_argument("subcommand", choices=("token", "start", "install"),
+                    help="token | start | install")
+    p5.add_argument("--token", default=None,
+                    help="Token to use (start/install). Omit to generate one.")
+    p5.add_argument("--port", type=int, default=7777,
+                    help="Port for the agent to listen on (default: 7777).")
+    p5.add_argument("--host", default="0.0.0.0",
+                    help="Bind address for the agent (default: 0.0.0.0 = all interfaces).")
+    p5.set_defaults(func=_cmd_agent)
 
     args = parser.parse_args()
     args.func(args)
@@ -252,6 +285,13 @@ def _build_adapter(args: "argparse.Namespace", device_id: str, dtype: "DeviceTyp
     if args.adb:
         from progenitor.devices.transports.adb import ADBAdapter
         return ADBAdapter(serial=args.adb_serial)
+    if args.agent:
+        if not args.agent_token:
+            print("Error: --agent requires --agent-token <token>.", file=__import__("sys").stderr)
+            print("Get a token from the target device: progenitor agent token", file=__import__("sys").stderr)
+            __import__("sys").exit(1)
+        from progenitor.devices.transports.agent import AgentAdapter
+        return AgentAdapter(token=args.agent_token, port=args.agent_port)
     # No transport flag: mock adapter (safe default)
     return mock_adapter()
 
@@ -278,8 +318,8 @@ def _cmd_enhance_device(args: "argparse.Namespace") -> None:
                 print(f"  {d}")
         return
 
-    if not args.dry_run and not args.ssh and not args.adb:
-        print("No transport specified. Use --ssh, --adb, or --dry-run.")
+    if not args.dry_run and not args.ssh and not args.adb and not args.agent:
+        print("No transport specified. Use --ssh, --adb, --agent, or --dry-run.")
         print("Run `progenitor enhance-device --help` for examples.")
         import sys; sys.exit(1)
 
@@ -358,3 +398,48 @@ def _cmd_enhance_device(args: "argparse.Namespace") -> None:
         print(f"Battery saved:       {report.improvement_battery_pct:.1f}%/hr")
     print()
     print(report.message)
+
+
+def _cmd_agent(args: argparse.Namespace) -> None:
+    """Manage the Progenitor Agent."""
+    from progenitor.devices.agent.server import generate_token, start_server, DEFAULT_PORT
+
+    if args.subcommand == "token":
+        tok = generate_token()
+        print(f"Token: {tok}")
+        print()
+        print("Give this token to the target device. Start the agent with:")
+        print(f"  progenitor agent start --token {tok}")
+        print()
+        print("Then on the operator side:")
+        print(f"  progenitor enhance-device --device <IP> --agent --agent-token {tok} ...")
+        return
+
+    token = args.token or generate_token()
+
+    if args.subcommand == "install":
+        print("Run this on the target device (needs Python 3.9+):")
+        print()
+        print(f"  pip install progenitor && progenitor agent start --token {token} --port {args.port}")
+        print()
+        print("Or if progenitor is already installed:")
+        print(f"  progenitor agent start --token {token} --port {args.port}")
+        print()
+        print(f"Token: {token}")
+        print(f"Port:  {args.port}")
+        print()
+        print("Once it's running, enhance from the operator machine:")
+        print(f"  progenitor enhance-device --device <TARGET_IP> --agent --agent-token {token} --agent-port {args.port} --device-type <TYPE> [levers...]")
+        return
+
+    if args.subcommand == "start":
+        if not args.token:
+            print(f"No token provided — generated one: {token}")
+            print()
+        print(f"Starting Progenitor Agent on {args.host}:{args.port}")
+        print(f"Token: {token}")
+        print()
+        print("On the operator machine, run:")
+        print(f"  progenitor enhance-device --device <THIS_IP> --agent --agent-token {token} --agent-port {args.port} --device-type <TYPE> [levers...]")
+        print()
+        start_server(token, host=args.host, port=args.port, background=False)

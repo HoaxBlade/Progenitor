@@ -34,6 +34,8 @@ def _infer_device_type(device_id: str) -> DeviceType:
     if "android" in d or "phone" in d:
         return DeviceType.PHONE_ANDROID
     sys = platform.system().lower()
+    if "darwin" in sys or "macos" in sys:
+        return DeviceType.PC_MACOS
     if "windows" in sys:
         return DeviceType.PC_WINDOWS
     if "linux" in sys:
@@ -98,6 +100,14 @@ def _mock_metrics_for(device_type: DeviceType) -> dict[str, Any]:
             "boot_time_s": 14.0,
             "idle_power_w": 12.0,
         }
+    if device_type == DeviceType.PC_MACOS:
+        return {
+            "cpu_score": cpu,
+            "io_mb_s": io,
+            "latency_ms": 2.0,
+            "boot_time_s": 20.0,
+            "idle_power_w": None,
+        }
     return {"cpu_score": cpu, "io_mb_s": io, "latency_ms": 0.0}
 
 
@@ -121,6 +131,11 @@ def _mock_metrics_after(device_type: DeviceType, baseline: dict[str, Any]) -> di
         after["latency_ms"] = baseline.get("latency_ms", 2.5) * 0.70
         after["boot_time_s"] = baseline.get("boot_time_s", 14.0) * 0.92
         after["idle_power_w"] = baseline.get("idle_power_w", 12.0) * 1.15
+    elif device_type == DeviceType.PC_MACOS:
+        after["cpu_score"] = baseline.get("cpu_score", 0) * 1.10
+        after["io_mb_s"] = baseline.get("io_mb_s", 0) * 1.08
+        after["latency_ms"] = baseline.get("latency_ms", 2.0) * 0.75
+        after["boot_time_s"] = baseline.get("boot_time_s", 20.0) * 0.90
     else:
         after["cpu_score"] = baseline.get("cpu_score", 0) * 1.10
         after["io_mb_s"] = baseline.get("io_mb_s", 0) * 1.10
@@ -222,6 +237,51 @@ def _measure_windows_real(session: DeviceSession, device_id: str) -> dict[str, A
     m["latency_ms"] = _parse_float(r.stdout) or 0.0
 
     m["idle_power_w"] = None  # Not available without WMI/hardware monitoring
+
+    return m
+
+
+# ---------------------------------------------------------------------------
+# Real measurement — macOS (Agent / SSH)
+# ---------------------------------------------------------------------------
+
+_MACOS_CPU_CMD = _LINUX_CPU_CMD   # Python3 works the same on macOS
+_MACOS_IO_CMD  = _LINUX_IO_CMD    # tempfile write also works the same
+_MACOS_LATENCY_CMD = _LINUX_LATENCY_CMD
+# sysctl kern.boottime gives: "{ sec = 1700000000, usec = 0 } Mon Nov 14 12:00:00 2023"
+# Calculate uptime in seconds: now - boot epoch
+_MACOS_BOOT_CMD = (
+    "python3 -c 'import time, subprocess; "
+    "out=subprocess.check_output([\"sysctl\",\"-n\",\"kern.boottime\"]).decode(); "
+    "import re; sec=re.search(r\"sec = (\\d+)\", out); "
+    "print(round(time.time()-int(sec.group(1)),1)) if sec else print(0)'"
+)
+# Check current App Nap state
+_MACOS_APPNAP_CMD = (
+    "defaults read NSGlobalDomain NSAppSleepDisabled 2>/dev/null || echo 0"
+)
+# Check animation state
+_MACOS_ANIM_CMD = (
+    "defaults read NSGlobalDomain NSAutomaticWindowAnimationsEnabled 2>/dev/null || echo 1"
+)
+
+
+def _measure_macos_real(session: DeviceSession, device_id: str) -> dict[str, Any]:
+    m: dict[str, Any] = {}
+
+    r = session.run_payload(_MACOS_CPU_CMD)
+    m["cpu_score"] = _parse_float(r.stdout) or 0.0
+
+    r = session.run_payload(_MACOS_IO_CMD)
+    m["io_mb_s"] = _parse_float(r.stdout) or 0.0
+
+    r = session.run_payload(_MACOS_LATENCY_CMD)
+    m["latency_ms"] = _parse_float(r.stdout) or 0.0
+
+    r = session.run_payload(_MACOS_BOOT_CMD)
+    m["boot_time_s"] = _parse_float(r.stdout)
+
+    m["idle_power_w"] = None  # Needs powermetrics (root); skip
 
     return m
 
@@ -329,9 +389,11 @@ def _measure_real(
         return _measure_linux_real(session, device_id)
     if device_type == DeviceType.PC_WINDOWS:
         return _measure_windows_real(session, device_id)
+    if device_type == DeviceType.PC_MACOS:
+        return _measure_macos_real(session, device_id)
     if device_type == DeviceType.PHONE_ANDROID:
         return _measure_android_real(session, device_id)
-    # Unknown: try Linux commands as best-effort
+    # Unknown: try Linux/macOS commands as best-effort
     return _measure_linux_real(session, device_id)
 
 

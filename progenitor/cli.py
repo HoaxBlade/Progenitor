@@ -81,8 +81,8 @@ def main() -> None:
     p4.add_argument("--device", "-d", metavar="IP/HOST", default=None,
                     help="Device IP or hostname. Default: env PROGENITOR_DEVICE.")
     p4.add_argument("--device-type", metavar="TYPE", default=None,
-                    choices=("phone_android", "pc_windows", "pc_linux"),
-                    help="Device type: phone_android | pc_windows | pc_linux")
+                    choices=("phone_android", "pc_windows", "pc_linux", "pc_macos"),
+                    help="Device type: phone_android | pc_windows | pc_linux | pc_macos")
     p4.add_argument("--list", action="store_true",
                     help="List discoverable/connected devices and exit.")
     p4.add_argument("--dry-run", action="store_true",
@@ -130,6 +130,16 @@ def main() -> None:
                      help="Disable Windows background app execution via registry.")
     _wg.add_argument("--game-mode", action="store_true",
                      help="Enable Windows Game Mode (foreground resource boost).")
+    # macOS levers
+    _mg = p4.add_argument_group("macOS levers")
+    _mg.add_argument("--disable-app-nap", action="store_true",
+                     help="Disable App Nap (prevents macOS from throttling background processes).")
+    _mg.add_argument("--disable-animations", action="store_true",
+                     help="Disable window open/close animations (less CPU/GPU overhead).")
+    _mg.add_argument("--reduce-transparency", action="store_true",
+                     help="Reduce UI transparency and blur effects (frees GPU cycles).")
+    _mg.add_argument("--disable-auto-termination", action="store_true",
+                     help="Disable automatic app termination (no silent process kills).")
     # Android levers
     _ag = p4.add_argument_group("Android levers")
     _ag.add_argument("--performance-profile", action="store_true",
@@ -331,14 +341,22 @@ def _cmd_enhance_device(args: "argparse.Namespace") -> None:
         dtype = DeviceType(args.device_type)
 
     opts = EnhanceOptions(
+        # Linux
         cpu_governor=args.cpu_governor,
         io_scheduler=args.io_scheduler,
         swappiness=args.swappiness,
         transparent_hugepages=args.transparent_hugepages,
+        # Windows
         power_plan=args.power_plan,
         disable_visual_effects=args.disable_visual_effects,
         disable_background_apps=args.disable_background_apps,
         game_mode=args.game_mode,
+        # macOS
+        disable_app_nap=args.disable_app_nap,
+        disable_animations=args.disable_animations,
+        reduce_transparency=args.reduce_transparency,
+        disable_auto_termination=args.disable_auto_termination,
+        # Android
         performance_profile=args.performance_profile,
         disable_doze=args.disable_doze,
         reduce_animations=args.reduce_animations,

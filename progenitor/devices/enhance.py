@@ -308,6 +308,109 @@ def _apply_android(
 
 
 # ---------------------------------------------------------------------------
+# macOS levers
+# ---------------------------------------------------------------------------
+
+def _macos_disable_app_nap(session: DeviceSession | None, mock: bool) -> LeverResult | None:
+    """
+    Disable App Nap — macOS throttles background apps to save power.
+    Disabling it ensures processes complete faster without CPU throttling.
+    Real command: defaults write NSGlobalDomain NSAppSleepDisabled -bool YES
+    Rollback:     defaults write NSGlobalDomain NSAppSleepDisabled -bool NO
+    """
+    if not mock and session is not None:
+        result = session.run_payload(
+            "defaults write NSGlobalDomain NSAppSleepDisabled -bool YES"
+        )
+        if not result.success:
+            return None
+    return LeverResult("app_nap", "enabled", "disabled", "App Nap disabled (no CPU throttling for background apps)")
+
+
+def _macos_disable_animations(session: DeviceSession | None, mock: bool) -> LeverResult | None:
+    """
+    Disable window open/close animations — reduces CPU/GPU overhead from UI chrome.
+    Real commands:
+      defaults write NSGlobalDomain NSAutomaticWindowAnimationsEnabled -bool false
+      defaults write NSGlobalDomain NSWindowResizeTime -float 0.001
+    Rollback:
+      defaults write NSGlobalDomain NSAutomaticWindowAnimationsEnabled -bool true
+      defaults delete NSGlobalDomain NSWindowResizeTime
+    """
+    if not mock and session is not None:
+        cmds = [
+            "defaults write NSGlobalDomain NSAutomaticWindowAnimationsEnabled -bool false",
+            "defaults write NSGlobalDomain NSWindowResizeTime -float 0.001",
+        ]
+        for cmd in cmds:
+            result = session.run_payload(cmd)
+            if not result.success:
+                return None
+    return LeverResult("animations", "enabled", "disabled", "Window animations disabled (less CPU/GPU overhead)")
+
+
+def _macos_reduce_transparency(session: DeviceSession | None, mock: bool) -> LeverResult | None:
+    """
+    Reduce UI transparency and blur effects — frees GPU cycles.
+    Real command: defaults write com.apple.universalaccess reduceTransparency -bool true
+    Rollback:     defaults write com.apple.universalaccess reduceTransparency -bool false
+    Note: takes effect after re-login or `killall Dock`.
+    """
+    if not mock and session is not None:
+        result = session.run_payload(
+            "defaults write com.apple.universalaccess reduceTransparency -bool true"
+        )
+        if not result.success:
+            return None
+    return LeverResult("transparency", "enabled", "reduced", "UI transparency/blur reduced (frees GPU cycles)")
+
+
+def _macos_disable_auto_termination(session: DeviceSession | None, mock: bool) -> LeverResult | None:
+    """
+    Disable automatic termination of inactive apps — prevents macOS from
+    silently killing processes to reclaim memory.
+    Real command: defaults write NSGlobalDomain NSDisableAutomaticTermination -bool YES
+    Rollback:     defaults write NSGlobalDomain NSDisableAutomaticTermination -bool NO
+    """
+    if not mock and session is not None:
+        result = session.run_payload(
+            "defaults write NSGlobalDomain NSDisableAutomaticTermination -bool YES"
+        )
+        if not result.success:
+            return None
+    return LeverResult("auto_termination", "enabled", "disabled", "Automatic app termination disabled (no silent kills)")
+
+
+def _apply_macos(
+    session: DeviceSession | None,
+    mock: bool,
+    *,
+    disable_app_nap: bool,
+    disable_animations: bool,
+    reduce_transparency: bool,
+    disable_auto_termination: bool,
+) -> list[LeverResult]:
+    applied: list[LeverResult] = []
+    if disable_app_nap:
+        r = _macos_disable_app_nap(session, mock)
+        if r:
+            applied.append(r)
+    if disable_animations:
+        r = _macos_disable_animations(session, mock)
+        if r:
+            applied.append(r)
+    if reduce_transparency:
+        r = _macos_reduce_transparency(session, mock)
+        if r:
+            applied.append(r)
+    if disable_auto_termination:
+        r = _macos_disable_auto_termination(session, mock)
+        if r:
+            applied.append(r)
+    return applied
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -326,6 +429,12 @@ class EnhanceOptions:
     disable_visual_effects: bool = False
     disable_background_apps: bool = False
     game_mode: bool = False
+
+    # macOS
+    disable_app_nap: bool = False
+    disable_animations: bool = False
+    reduce_transparency: bool = False
+    disable_auto_termination: bool = False
 
     # Android
     performance_profile: bool = False
@@ -348,6 +457,15 @@ def apply_enhancements(
         opts = EnhanceOptions()
     mock = session is None or isinstance(session, MockDeviceSession)
 
+    if device_type == DeviceType.PC_MACOS:
+        return _apply_macos(
+            session,
+            mock,
+            disable_app_nap=opts.disable_app_nap,
+            disable_animations=opts.disable_animations,
+            reduce_transparency=opts.reduce_transparency,
+            disable_auto_termination=opts.disable_auto_termination,
+        )
     if device_type == DeviceType.PC_LINUX:
         return _apply_linux(
             session,

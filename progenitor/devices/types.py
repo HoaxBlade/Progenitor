@@ -13,6 +13,7 @@ class DeviceType(str, Enum):
     PHONE_ANDROID = "phone_android"
     PC_WINDOWS = "pc_windows"
     PC_LINUX = "pc_linux"
+    PC_MACOS = "pc_macos"
     UNKNOWN = "unknown"
 
 
